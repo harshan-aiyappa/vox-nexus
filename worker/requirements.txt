@@ -1,0 +1,5 @@
+livekit
+livekit-agents
+faster-whisper
+python-dotenv
+numpy
