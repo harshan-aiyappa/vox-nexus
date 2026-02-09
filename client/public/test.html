@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Backend Test</title>
+</head>
+
+<body>
+    <h1>Testing Backend Connection</h1>
+    <button onclick="testFetch()">Test Fetch Token</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function testFetch() {
+            const resultEl = document.getElementById('result');
+            try {
+                resultEl.textContent = 'Fetching...';
+                const response = await fetch('http://localhost:8080/token?room=test&name=testuser');
+                const data = await response.json();
+                resultEl.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                resultEl.textContent = 'ERROR: ' + error.message;
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+
+</html>
