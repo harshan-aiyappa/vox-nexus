@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, XCircle, Loader2, ShieldCheck, Mic, Server, Globe, Zap, ArrowRight } from 'lucide-react';
 import clsx from 'clsx';
