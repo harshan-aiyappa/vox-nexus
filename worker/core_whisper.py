@@ -27,9 +27,9 @@ class WhisperService:
         """Loads the Whisper model if not already loaded."""
         if not self.model and WhisperModel:
             try:
-                logger.info("🧠 Loading Whisper Model (tiny)...")
-                self.model = WhisperModel("tiny", device="cpu", compute_type="int8")
-                logger.info("✅ Whisper Model (tiny) Loaded Successfully!")
+                logger.info("🧠 Loading Whisper Model (small)...")
+                self.model = WhisperModel("small", device="cpu", compute_type="int8")
+                logger.info("✅ Whisper Model (small) Loaded Successfully!")
             except Exception as e:
                 logger.error(f"❌ Failed to load Whisper Model: {e}")
         elif self.model:

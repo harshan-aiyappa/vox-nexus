@@ -4,7 +4,8 @@ import logging
 import os
 import uvicorn
 from dotenv import load_dotenv
-from livekit.agents import Worker, WorkerOptions
+from livekit.agents import WorkerOptions
+from livekit.agents.worker import AgentServer   # Fixed import
 
 # Imports from sibling modules
 # Ensure these modules are in the python path or same directory
@@ -35,9 +36,11 @@ async def main():
 
     # 3. Configure Agent Mode Worker (LiveKit)
     # Wraps the connection logic to LiveKit Cloud
-    lk_worker = Worker(WorkerOptions(
+    # We use port 8082 for the health check to avoid conflicts with other 8081 processes
+    lk_worker = AgentServer.from_server_options(WorkerOptions(
         entrypoint_fnc=entrypoint,
-        load_threshold=0.9 
+        load_threshold=0.9,
+        port=8082
     ))
 
     # 4. Run Concurrently
