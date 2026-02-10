@@ -1,11 +1,9 @@
 import asyncio
+import time
 import os
-import sys
-import io
 import json
 import logging
 import numpy as np
-import traceback
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit import rtc
 from dotenv import load_dotenv
@@ -14,14 +12,20 @@ from dotenv import load_dotenv
 try:
     from faster_whisper import WhisperModel
 except ImportError:
-    print("❌ faster_whisper not installed. STT will not work.")
+    logging.error("❌ faster_whisper not installed. STT will not work.")
     WhisperModel = None
 
-load_dotenv()
+# Load environment variables from root directory if not found in worker directory
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv()
+
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("agent")
+logger = logging.getLogger("vox-nexus")
+logger.setLevel(logging.INFO)
 
 # Initialize Whisper (Moved to entrypoint to prevent spawn timeout)
 model = None
@@ -29,16 +33,16 @@ model = None
 async def entrypoint(ctx: JobContext):
     global model
     
-    print(f"🚀 Job Started! Room: {ctx.room.name}", flush=True)
+    logger.info(f"🚀 Job Started! Room: {ctx.room.name}")
 
     # Initialize model if not loaded (per process)
     if not model and WhisperModel:
         try:
-            print("🧠 Loading Whisper Model (small)...")
+            logger.info("🧠 Loading Whisper Model (small)...")
             model = WhisperModel("small", device="cpu", compute_type="int8")
-            print("✅ Whisper Model Loaded Successfully!")
+            logger.info("✅ Whisper Model Loaded Successfully!")
         except Exception as e:
-            print(f"❌ Failed to load Whisper Model: {e}", flush=True)
+            logger.error(f"❌ Failed to load Whisper Model: {e}")
 
     # State for dynamic language (per room/job)
     current_language = "en"
@@ -47,51 +51,63 @@ async def entrypoint(ctx: JobContext):
     def on_data_received(data: rtc.DataPacket):
         nonlocal current_language
         try:
-            # data is DataPacket object? Has .data (bytes)
-            # In livekit-python < 0.8 it might be simpler.
-            # Assuming data is the payload bytes.
-            
-            # Check if data has .data attribute
             payload_bytes = data.data if hasattr(data, "data") else data
-            
             payload = json.loads(payload_bytes.decode("utf-8"))
             if payload.get("type") == "set_language":
                 code = payload.get("code", "en")
                 if code != current_language:
                     current_language = code
-                    print(f"🌍 Language switched to: {current_language}", flush=True)
-                    # Acknowledge?
+                    logger.info(f"🌍 Language switched to: {current_language}")
+                    # Acknowledge
                     asyncio.create_task(ctx.room.local_participant.publish_data(
                         json.dumps({"type": "status", "message": f"Language set to {current_language}"}), reliable=True))
-        
         except Exception as e:
-            print(f"⚠️ Error handling data packet: {e}", flush=True)
+            logger.error(f"⚠️ Error handling data packet: {e}")
+
+    # Hallucination Blocklist (Common Whisper artifacts)
+    HALLUCINATIONS = {
+        "Thank you.", "Thanks for watching.", "You", 
+        "MBC", "Amara.org", "Subtitles by", "Subtitles",
+        "Copyright", "©"
+    }
+
+    def filter_hallucinations(text: str) -> str:
+        if not text: return ""
+        cleaned = text.strip().lower()
+        if not cleaned: return ""
+        
+        # Exact match check
+        for h in HALLUCINATIONS:
+            if cleaned == h.lower():
+                return ""
+        
+        # Prefix check for "Thank you" artifacts
+        if cleaned.startswith("thank you") and len(cleaned) < 15:
+            return ""
+        return text
 
     async def transcribe_track(track: rtc.RemoteAudioTrack, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
-        print(f"🎧 Started transcribing audio from {participant.identity} (sid: {participant.sid})", flush=True)
-        # Use LiveKit's internal resampling to get 16k mono directly
+        logger.info(f"🎧 [START_STREAM] {participant.identity} (sid: {participant.sid})")
         audio_stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
         
-        # Buffer accumulation
         accumulated_data = [] 
         accumulated_samples = 0
         peak_vol = 0
         SAMPLE_RATE = 16000
-        CHUNK_SECONDS = 3.0
+        CHUNK_SECONDS = 2.0 # Reduced to 2s for better responsiveness
         BUFFER_SIZE = int(SAMPLE_RATE * CHUNK_SECONDS)
+        
+        # Keep track of last processing time to avoid overlap if needed
+        processing_task = None
         
         async for event in audio_stream:
             frame = event.frame
             
-            # Debug sample rate once
             if accumulated_samples == 0:
-                 sys.stdout.write(f"🔍 Audio Frame: {frame.sample_rate}Hz, Channels: {frame.num_channels}, {len(frame.data)} bytes\n")
-                 sys.stdout.flush()
+                 logger.debug(f"🔍 [AUDIO_FRAME] {frame.sample_rate}Hz, Channels: {frame.num_channels}, {len(frame.data)} bytes")
 
-            # Convert to numpy (Already 16k Mono)
             arr = np.frombuffer(frame.data, dtype=np.int16)
             
-            # Update Peak Volume
             current_max = np.abs(arr).max() if len(arr) > 0 else 0
             if current_max > peak_vol:
                 peak_vol = current_max
@@ -99,76 +115,159 @@ async def entrypoint(ctx: JobContext):
             accumulated_data.append(arr)
             accumulated_samples += len(arr)
 
-            # periodically transcribe (every 3 seconds)
+            # Process if buffer full AND (previous task done OR no task)
+            # Simple approach: just process every chunk for now, blocking slightly (asyncio.to_thread would be better but keeping it simple)
             if accumulated_samples >= BUFFER_SIZE:
-                 sys.stdout.write(f"📊 Audio Chunk - Peak Volume: {peak_vol}\n")
-                 sys.stdout.flush()
+                 start_time = time.time()
+                 logger.info(f"📊 [PROCESS_CHUNK] Peak Volume: {peak_vol:.4f}")
                  
-                 # Merge
+                 # Pre-check volume threshold to skip silence
+                 if peak_vol < 100: # Very low threshold
+                     logger.debug(f"🔇 [SKIP_SILENCE] Volume too low ({peak_vol})")
+                     accumulated_data = [] # Keep only last bit? No, clear for now.
+                     accumulated_samples = 0
+                     peak_vol = 0
+                     continue
+
                  full_arr = np.concatenate(accumulated_data)
-                 
-                 # Convert to float32 for Whisper
                  float_arr = full_arr.astype(np.float32) / 32768.0
                  
-                 # Transcribe with DYNAMIC LANGUAGE
                  if model:
                      try:
-                         # Use current_language
-                         segments, info = model.transcribe(float_arr, beam_size=5, language=current_language, condition_on_previous_text=False)
+                         # Log VAD/Inference start
+                         logger.info(f"🤖 [INFERENCE_START] Language: {current_language}")
                          
-                         text = " ".join([segment.text for segment in segments]).strip()
+                         # Execute in thread executor to not block heartbeat
+                         loop = asyncio.get_running_loop()
                          
-                         if text:
-                             sys.stdout.write(f"📝 Transcription ({current_language}): {text}\n")
-                             sys.stdout.flush()
-                             # Send to Room
-                             payload = json.dumps({"type": "transcription", "text": text, "participant": "agent", "language": current_language})
+                         def run_inference():
+                             segments, info = model.transcribe(
+                                 float_arr, 
+                                 beam_size=1, 
+                                 language=current_language, 
+                                 condition_on_previous_text=False,
+                                 vad_filter=True,
+                                 vad_parameters=dict(min_speech_duration_ms=150),
+                                 no_speech_threshold=0.6
+                             )
+                             return " ".join([segment.text for segment in segments]).strip()
+
+                         text = await loop.run_in_executor(None, run_inference)
+                         
+                         cleaned_text = filter_hallucinations(text)
+                         inference_duration = time.time() - start_time
+                         
+                         if cleaned_text:
+                             logger.info(f"📝 [TRANSCRIPTION] '{cleaned_text}' (Lat: {inference_duration:.3f}s | Lang: {current_language})")
+                             payload = json.dumps({
+                                 "type": "transcription", 
+                                 "text": cleaned_text, 
+                                 "participant": "agent", 
+                                 "language": current_language,
+                                 "latency_ms": int(inference_duration * 1000)
+                             })
                              await ctx.room.local_participant.publish_data(payload, reliable=True)
+                         else:
+                             if text:
+                                 logger.info(f"🗑️ [FILTERED] '{text}' (Hallucination)")
+                             else:
+                                 logger.debug(f"🤐 [SILENCE] (Lat: {inference_duration:.3f}s)")
                              
                      except Exception as e:
-                         sys.stdout.write(f"❌ Transcription error: {e}\n")
-                         sys.stdout.flush()
+                         logger.error(f"❌ [ERROR] Transcription failed: {e}")
                  
-                 # Reset buffer
                  accumulated_data = []
                  accumulated_samples = 0
                  peak_vol = 0
                  
-        print("🔇 Audio stream ended", flush=True)
+        logger.info(f"🔇 [END_STREAM] {participant.identity}")
 
     @ctx.room.on("track_published")
     def on_track_published(publication, participant):
-        print(f"🛰️ Track Published: {publication.sid} ({publication.kind}) from {participant.identity}", flush=True)
+        logger.info(f"hw_event_mic: 🛰️ [TRACK_PUBLISHED] {publication.sid} ({publication.kind}) from {participant.identity}")
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track, publication, participant):
-        print(f"✅ Track Subscribed: {publication.sid} from {participant.identity} ({track.kind})", flush=True)
+        logger.info(f"hw_event_mic: ✅ [TRACK_SUBSCRIBED] {publication.sid} from {participant.identity} ({track.kind})")
         if track.kind == rtc.TrackKind.KIND_AUDIO:
             asyncio.create_task(transcribe_track(track, publication, participant))
 
+    @ctx.room.on("track_muted")
+    def on_track_muted(*args):
+        logger.info(f"🔍 [DEBUG_ARGS] track_muted received {len(args)} args: {[type(a).__name__ for a in args]}")
+        
+        participant = None
+        publication = None
+
+        # Introspect arguments to find the right objects
+        for arg in args:
+            if hasattr(arg, "identity"): # Likely RemoteParticipant
+                participant = arg
+            elif hasattr(arg, "sid") and hasattr(arg, "kind"): # Likely RemoteTrackPublication
+                publication = arg
+        
+        # Fallback: if we have publication but no participant
+        if publication and not participant:
+             # Try to find participant who owns this publication
+             for p in ctx.room.remote_participants.values():
+                 if publication.sid in p.track_publications:
+                     participant = p
+                     break
+        
+        identity = participant.identity if participant else "Unknown"
+        sid = publication.sid if publication else "Unknown"
+        
+        logger.info(f"hw_event_mic: 🔇 [MIC_OFF] {identity} muted track {sid}")
+        
+        if participant:
+            asyncio.create_task(ctx.room.local_participant.publish_data(
+                json.dumps({"type": "mic_status", "status": "muted", "participant": identity}), reliable=True))
+
+    @ctx.room.on("track_unmuted")
+    def on_track_unmuted(*args):
+        logger.info(f"🔍 [DEBUG_ARGS] track_unmuted received {len(args)} args: {[type(a).__name__ for a in args]}")
+
+        participant = None
+        publication = None
+
+        for arg in args:
+            if hasattr(arg, "identity"):
+                participant = arg
+            elif hasattr(arg, "sid") and hasattr(arg, "kind"):
+                publication = arg
+        
+        if publication and not participant:
+             for p in ctx.room.remote_participants.values():
+                 if publication.sid in p.track_publications:
+                     participant = p
+                     break
+
+        identity = participant.identity if participant else "Unknown"
+        sid = publication.sid if publication else "Unknown"
+        
+        logger.info(f"hw_event_mic: 🎤 [MIC_ON] {identity} unmuted track {sid}")
+
+        if participant:
+            asyncio.create_task(ctx.room.local_participant.publish_data(
+                json.dumps({"type": "mic_status", "status": "active", "participant": identity}), reliable=True))
+
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant):
-        print(f"👤 Participant connected: {participant.identity}", flush=True)
+        logger.info(f"👤 [USER_CONNECTED] {participant.identity}")
 
     await ctx.connect(auto_subscribe=True)
-    print(f"✅ Successfully joined room: {ctx.room.name}", flush=True)
+    logger.info(f"✅ [JOINED] Room: {ctx.room.name}")
     
-    # Process existing tracks with improved logic
-    print(f"🔍 Checking for existing participants... ({len(ctx.room.remote_participants)})", flush=True)
+    logger.info(f"🔍 [CHECK_PARTICIPANTS] Count: {len(ctx.room.remote_participants)}")
     for participant in ctx.room.remote_participants.values():
-        print(f"  - Found participant: {participant.identity} with {len(participant.track_publications)} tracks", flush=True)
+        logger.info(f"  - Found: {participant.identity}")
         for sid, publication in participant.track_publications.items():
-            print(f"    - Track {sid}: kind={publication.kind}, subscribed={publication.subscribed}, track={publication.track}", flush=True)
-            
             if publication.kind == rtc.TrackKind.KIND_AUDIO:
                  if publication.track:
-                     print(f"    - Found existing audio track from {participant.identity}, starting transcribe...", flush=True)
                      asyncio.create_task(transcribe_track(publication.track, publication, participant))
                  elif not publication.subscribed:
-                     print(f"    - Track not subscribed. Force subscribing...", flush=True)
                      publication.set_subscribed(True)
     
-    # Keep alive
     await asyncio.sleep(3600*24) 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useLiveKit } from './hooks/useLiveKit';
-import { Mic, MicOff, Activity, MessageSquare, Wifi, WifiOff, AlertCircle, Zap, TrendingUp, Globe, PhoneOff } from 'lucide-react';
+import { Mic, MicOff, Activity, MessageSquare, Wifi, WifiOff, AlertCircle, Zap, TrendingUp, Globe, PhoneOff, ShieldCheck } from 'lucide-react';
 import clsx from 'clsx';
 import { BackgroundGradient } from './components/ui/background-gradient';
 import { HoverBorderGradient } from './components/ui/hover-border-gradient';
 import { CardContainer, CardBody, CardItem } from './components/ui/3d-card';
+import { SystemCheckModal } from './components/SystemCheckModal';
 
 function App() {
     const [url, setUrl] = useState(import.meta.env.VITE_LIVEKIT_URL || '');
@@ -14,6 +15,15 @@ function App() {
     const [latency, setLatency] = useState(0);
     const [packetLoss, setPacketLoss] = useState(0);
     const [currentLanguage, setCurrentLanguage] = useState('en');
+    const [isSystemCheckOpen, setIsSystemCheckOpen] = useState(false);
+
+    // Run system check on mount
+    useEffect(() => {
+        const hasChecked = sessionStorage.getItem('vox_nexus_system_checked');
+        if (!hasChecked) {
+            setIsSystemCheckOpen(true);
+        }
+    }, []);
 
     useEffect(() => {
         if (isConnected && agentConnected) {
@@ -87,6 +97,13 @@ function App() {
                     </div>
 
                     <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => setIsSystemCheckOpen(true)}
+                            className="flex items-center gap-2 px-4 py-2 rounded-full bg-white shadow-md border border-gray-200 text-indigo-600 hover:bg-indigo-50 transition-colors font-medium text-sm"
+                        >
+                            <ShieldCheck className="w-4 h-4" />
+                            Check System
+                        </button>
                         <div className={clsx("flex items-center gap-2 px-4 py-2 rounded-full bg-white shadow-md border border-gray-200", getConnectionQualityColor())}>
                             {isConnected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
                             <span className="capitalize font-medium text-sm">{connectionQuality}</span>
@@ -278,6 +295,15 @@ function App() {
 
                 </div>
             </div>
+
+            <SystemCheckModal
+                isOpen={isSystemCheckOpen}
+                onClose={() => setIsSystemCheckOpen(false)}
+                onComplete={() => {
+                    sessionStorage.setItem('vox_nexus_system_checked', 'true');
+                    setIsSystemCheckOpen(false);
+                }}
+            />
         </div>
     );
 }
