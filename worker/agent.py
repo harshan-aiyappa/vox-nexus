@@ -9,21 +9,14 @@ from livekit.agents import JobContext, WorkerOptions, cli
 from livekit import rtc
 from dotenv import load_dotenv
 
+from core_whisper import whisper_service
+
 # --- Configuration & Constants ---
 SAMPLE_RATE = 16000
 CHANNELS = 1
 CHUNK_SECONDS = 2.0 
 BYTES_PER_SAMPLE = 2  # int16
 BUFFER_SIZE_BYTES = int(SAMPLE_RATE * CHUNK_SECONDS * BYTES_PER_SAMPLE)
-VAD_MIN_SPEECH_DURATION_MS = 150
-VAD_NO_SPEECH_THRESHOLD = 0.6
-
-# Hallucination Blocklist (Common Whisper artifacts)
-HALLUCINATIONS: Set[str] = {
-    "Thank you.", "Thanks for watching.", "You", 
-    "MBC", "Amara.org", "Subtitles by", "Subtitles",
-    "Copyright", "©"
-}
 
 # --- Setup ---
 # Load environment variables
@@ -36,53 +29,6 @@ else:
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("vox-nexus")
-
-# Try importing faster_whisper
-try:
-    from faster_whisper import WhisperModel
-except ImportError:
-    logger.error("❌ faster_whisper not installed. STT will not work.")
-    WhisperModel = None
-
-# Global Model Instance (Lazy loaded)
-model: Optional['WhisperModel'] = None
-
-# --- Helper Functions ---
-
-def filter_hallucinations(text: str) -> str:
-    """Filters out common Whisper hallucinations."""
-    if not text: 
-        return ""
-    
-    cleaned = text.strip()
-    if not cleaned: 
-        return ""
-    
-    cleaned_lower = cleaned.lower()
-    
-    # Exact match check
-    for h in HALLUCINATIONS:
-        if cleaned_lower == h.lower():
-            return ""
-    
-    # Prefix check for "Thank you" artifacts
-    if cleaned_lower.startswith("thank you") and len(cleaned_lower) < 15:
-        return ""
-        
-    return cleaned
-
-def load_model():
-    """Loads the Whisper model if not already loaded."""
-    global model
-    if not model and WhisperModel:
-        try:
-            logger.info("🧠 Loading Whisper Model (tiny)...")
-            model = WhisperModel("tiny", device="cpu", compute_type="int8")
-            logger.info("✅ Whisper Model (tiny) Loaded Successfully!")
-        except Exception as e:
-            logger.error(f"❌ Failed to load Whisper Model: {e}")
-    elif model:
-        logger.info("🧠 Model already loaded (cached).")
 
 # --- Core Logic ---
 
@@ -104,7 +50,6 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, publication: rtc.RemoteT
              start_time = time.time()
              
              # Create Read-Only View to avoid copy
-             # IMPORTANT: np.frombuffer locks the buffer. We must rebind buffer instead of clearing it.
              full_arr_view = np.frombuffer(audio_buffer, dtype=np.int16)
              
              # Quick volume check
@@ -115,55 +60,36 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, publication: rtc.RemoteT
                  audio_buffer = bytearray() # Rebind to new buffer
                  continue
              
-             # Log only in debug to reduce noise
-             logger.debug(f"📊 [PROCESS_CHUNK] Peak: {peak_vol:.4f} | Size: {len(audio_buffer)}")
-
              # Create float array (this performs a copy and type conversion)
              float_arr = full_arr_view.astype(np.float32) / 32768.0
              
              # Rebind to new buffer to avoid BufferError
              audio_buffer = bytearray()
              
-             if model:
-                 try:
-                     current_lang = current_language_ref.get("code", "en")
-                     # Log VAD/Inference start
-                     logger.debug(f"🤖 [INFERENCE_START] Language: {current_lang}")
-                     
-                     loop = asyncio.get_running_loop()
-                     
-                     def run_inference():
-                         segments, _ = model.transcribe(
-                             float_arr, 
-                             beam_size=1, 
-                             language=current_lang, 
-                             condition_on_previous_text=False,
-                             vad_filter=True,
-                             vad_parameters=dict(min_speech_duration_ms=VAD_MIN_SPEECH_DURATION_MS),
-                             no_speech_threshold=VAD_NO_SPEECH_THRESHOLD
-                         )
-                         return " ".join([segment.text for segment in segments]).strip()
+             try:
+                 current_lang = current_language_ref.get("code", "en")
+                 loop = asyncio.get_running_loop()
+                 
+                 def run_inference():
+                     return whisper_service.transcribe(float_arr, language=current_lang)
 
-                     text = await loop.run_in_executor(None, run_inference)
+                 text = await loop.run_in_executor(None, run_inference)
+                 inference_duration = time.time() - start_time
+                 
+                 if text:
+                     logger.info(f"📝 [TRANSCRIPTION] '{text}' (Lat: {inference_duration:.3f}s)")
+                     payload = json.dumps({
+                         "type": "transcription", 
+                         "text": text, 
+                         "participant": "agent", 
+                         "language": current_lang,
+                         "latency_ms": int(inference_duration * 1000)
+                     })
+                     await room.local_participant.publish_data(payload, reliable=True)
                      
-                     cleaned_text = filter_hallucinations(text)
-                     inference_duration = time.time() - start_time
-                     
-                     if cleaned_text:
-                         logger.info(f"📝 [TRANSCRIPTION] '{cleaned_text}' (Lat: {inference_duration:.3f}s)")
-                         payload = json.dumps({
-                             "type": "transcription", 
-                             "text": cleaned_text, 
-                             "participant": "agent", 
-                             "language": current_lang,
-                             "latency_ms": int(inference_duration * 1000)
-                         })
-                         await room.local_participant.publish_data(payload, reliable=True)
-                     elif text:
-                         logger.debug(f"🗑️ [FILTERED] '{text}'")
-                         
-                 except Exception as e:
-                     logger.error(f"❌ [ERROR] Transcription failed: {e}")
+             except Exception as e:
+                 logger.error(f"❌ [ERROR] Transcription failed: {e}")
+
              
     logger.info(f"🔇 [END_STREAM] {participant.identity}")
 
@@ -172,7 +98,7 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"🚀 Job Started! Room: {ctx.room.name}")
 
     # Initialize model
-    load_model()
+    whisper_service.load_model()
 
     # State for dynamic language (per room/job)
     # Using a dict to pass by reference to the coroutine
