@@ -6,15 +6,6 @@ export const BackgroundGradient = ({
     containerClassName,
     animate = true,
 }) => {
-    const variants = {
-        initial: {
-            backgroundPosition: "0 50%",
-        },
-        animate: {
-            backgroundPosition: ["0, 50%", "100% 50%", "0 50%"],
-        },
-    };
-
     return (
         <div className={cn("relative p-[4px] group", containerClassName)}>
             <div
@@ -24,17 +15,24 @@ export const BackgroundGradient = ({
                 )}
                 style={{
                     backgroundSize: "400% 400%",
-                    animation: animate ? "gradient 5s ease infinite" : undefined,
+                    animation: animate ? "gradient-animation 10s ease infinite" : undefined,
                 }}
             />
             <div
                 className={cn(
-                    "relative z-10 rounded-3xl",
+                    "relative z-10 rounded-3xl h-full",
                     className
                 )}
             >
                 {children}
             </div>
+            <style>{`
+                @keyframes gradient-animation {
+                    0% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                    100% { background-position: 0% 50%; }
+                }
+            `}</style>
         </div>
     );
 };
