@@ -120,7 +120,7 @@ function App() {
                             className="flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-white border border-indigo-100 text-slate-600 hover:text-indigo-600 hover:border-indigo-300 transition-all font-bold text-xs sm:text-sm shadow-sm backdrop-blur-md"
                         >
                             <ShieldCheck className="w-4 h-4 text-indigo-500" />
-                            System Health
+                            Health
                         </button>
                         <div className={clsx("flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-white border border-indigo-50 shadow-sm transition-all", getConnectionQualityColor())}>
                             {isConnected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
@@ -139,7 +139,7 @@ function App() {
                     <div className="lg:col-span-1 flex flex-col gap-6 overflow-y-auto lg:pr-2 lg:custom-scrollbar max-lg:pb-4">
 
                         {/* Control Deck with Background Gradient */}
-                        <BackgroundGradient className="rounded-[28px] p-1 bg-white shadow-2xl shadow-indigo-100/50">
+                        <BackgroundGradient className="rounded-[28px] p-1 bg-white shadow-lg shadow-indigo-100/30">
                             <div className="p-6 sm:p-8 rounded-[24px] bg-white/95 backdrop-blur-xl h-full flex flex-col border border-indigo-50/50">
                                 <div className="flex items-center gap-3 mb-8">
                                     <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-100">
@@ -205,7 +205,7 @@ function App() {
                                                     className="group relative py-5 px-4 rounded-2xl font-black bg-rose-600 text-white hover:bg-rose-700 shadow-xl shadow-rose-200 flex flex-col items-center justify-center gap-2 transition-all active:scale-95"
                                                 >
                                                     <PhoneOff className="w-6 h-6" />
-                                                    <span className="text-[10px] uppercase tracking-[0.2em]">TERMINATE</span>
+                                                    <span className="text-[10px] uppercase tracking-[0.2em]">QUIT</span>
                                                 </button>
                                             </>
                                         ) : (
@@ -217,7 +217,7 @@ function App() {
                                                     className="bg-indigo-600 text-white font-black text-lg h-full w-full flex items-center justify-center gap-3 active:scale-95 transition-all shadow-xl shadow-indigo-200"
                                                 >
                                                     <Mic className="w-6 h-6" />
-                                                    START UPLINK
+                                                    UPLINK
                                                 </MovingBorder>
                                             </div>
                                         )}
@@ -230,44 +230,46 @@ function App() {
                                                     <div key={i} className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
                                                 ))}
                                             </div>
-                                            <span className="text-xs font-black text-indigo-700 tracking-[0.15em] uppercase antialiased">Neural Decoding...</span>
+                                            <span className="text-xs font-black text-indigo-700 tracking-[0.15em] uppercase antialiased">Decoding...</span>
                                         </div>
                                     )}
                                 </div>
                             </div>
                         </BackgroundGradient>
 
-                        {/* Telemetry Module */}
-                        <div className="w-full">
-                            <div className="p-7 rounded-[28px] bg-white border border-indigo-100/60 shadow-lg shadow-indigo-100/20 flex flex-col gap-6 group hover:border-indigo-200 transition-all">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-100">
-                                        <TrendingUp className="w-5 h-5 text-emerald-600" />
-                                    </div>
-                                    <h2 className="text-lg font-black text-slate-800 tracking-tight">Active Telemetry</h2>
-                                </div>
+                        {/* Telemetry Module with 3D Rotation */}
+                        <CardContainer className="w-full" containerClassName="py-0">
+                            <CardBody className="w-full">
+                                <div className="p-7 rounded-[28px] bg-white border border-indigo-100/60 shadow-xl shadow-indigo-100/20 flex flex-col gap-6 group hover:border-indigo-300 transition-all">
+                                    <CardItem translateZ={20} className="flex items-center gap-3">
+                                        <div className="p-2 rounded-xl bg-emerald-50 border border-emerald-100">
+                                            <TrendingUp className="w-5 h-5 text-emerald-600" />
+                                        </div>
+                                        <h2 className="text-lg font-black text-slate-800 tracking-tight">Active Telemetry</h2>
+                                    </CardItem>
 
-                                <div className="w-full grid grid-cols-2 gap-4">
-                                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 group-hover:border-indigo-100 transition-all">
-                                        <span className="block text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Latency</span>
-                                        <span className="text-2xl font-mono font-black text-slate-800">12<span className="text-xs text-slate-400 ml-1 italic font-normal">ms</span></span>
-                                    </div>
-                                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 group-hover:border-indigo-100 transition-all">
-                                        <span className="block text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Packet Loss</span>
-                                        <span className="text-2xl font-mono font-black text-slate-800">0.0<span className="text-xs text-slate-400 ml-1 italic font-normal">%</span></span>
-                                    </div>
+                                    <CardItem translateZ={40} className="w-full grid grid-cols-2 gap-4">
+                                        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-white transition-all">
+                                            <span className="block text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Latency</span>
+                                            <span className="text-2xl font-mono font-black text-slate-800">12<span className="text-xs text-slate-400 ml-1 italic font-normal">ms</span></span>
+                                        </div>
+                                        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 hover:border-indigo-200 hover:bg-white transition-all">
+                                            <span className="block text-slate-400 text-[10px] font-black uppercase tracking-widest mb-2">Packet Loss</span>
+                                            <span className="text-2xl font-mono font-black text-slate-800">0.0<span className="text-xs text-slate-400 ml-1 italic font-normal">%</span></span>
+                                        </div>
+                                    </CardItem>
                                 </div>
-                            </div>
-                        </div>
+                            </CardBody>
+                        </CardContainer>
 
                         {/* Hardware Insight */}
-                        <div className="p-5 rounded-2xl bg-amber-50 border border-amber-100 transition-all hover:bg-amber-100/50">
+                        <div className="p-5 rounded-2x2 bg-amber-50 border border-amber-100 transition-all hover:bg-amber-100/50">
                             <div className="flex items-start gap-4">
                                 <div className="p-1.5 rounded-lg bg-white border border-amber-200">
                                     <AlertCircle className="w-5 h-5 shrink-0 text-amber-600" />
                                 </div>
                                 <div>
-                                    <p className="text-[11px] leading-relaxed text-amber-800 font-bold uppercase tracking-wide">Optimization Protocol</p>
+                                    <p className="text-[11px] leading-relaxed text-amber-800 font-bold uppercase tracking-wide">Protocol</p>
                                     <p className="text-[11px] leading-relaxed text-amber-700/80 font-medium mt-0.5">Mobile devices require direct user gestures to activate hardware stream. Tap manual resume if uplink stalls.</p>
                                 </div>
                             </div>
@@ -300,7 +302,7 @@ function App() {
                                         <Mic className="relative w-16 h-16 sm:w-20 sm:h-20 text-indigo-600" />
                                     </div>
                                     <div className="text-center space-y-2">
-                                        <p className="text-xl font-black text-slate-400 uppercase tracking-[0.3em]">Awaiting Link</p>
+                                        <p className="text-xl font-black text-slate-400 uppercase tracking-[0.3em]">Awaiting Uplink</p>
                                         <p className="text-xs sm:text-sm text-slate-400 font-bold uppercase tracking-wider">Initialize hardware to begin processing Neural Data</p>
                                     </div>
                                 </div>
