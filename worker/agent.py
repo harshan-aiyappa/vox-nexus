@@ -201,7 +201,7 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(transcribe_track(track, publication, participant, ctx.room, current_language_ref))
 
     @ctx.room.on("track_muted")
-    def on_track_muted(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+    def on_track_muted(participant: rtc.RemoteParticipant, publication: rtc.RemoteTrackPublication):
         # Simply logging, logic can be extended
         identity = participant.identity if participant else "Unknown"
         logger.info(f"🔇 [MIC_OFF] {identity} muted track {publication.sid}")
@@ -210,7 +210,7 @@ async def entrypoint(ctx: JobContext):
             json.dumps({"type": "mic_status", "status": "muted", "participant": identity}), reliable=True))
 
     @ctx.room.on("track_unmuted")
-    def on_track_unmuted(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+    def on_track_unmuted(participant: rtc.RemoteParticipant, publication: rtc.RemoteTrackPublication):
         identity = participant.identity if participant else "Unknown"
         logger.info(f"🎤 [MIC_ON] {identity} unmuted track {publication.sid}")
 
