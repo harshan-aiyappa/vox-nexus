@@ -1,108 +1,103 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CheckCircle2, XCircle, Loader2, ShieldCheck, Mic, Server, Globe, Zap, ArrowRight } from 'lucide-react';
 import clsx from 'clsx';
 
-export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
-    const [checks, setChecks] = useState({
-        backend: { status: 'idle', label: 'Backend Server' },
-        livekit: { status: 'idle', label: 'LiveKit Cloud' },
-        mic: { status: 'idle', label: 'Microphone Access' },
-        internet: { status: 'idle', label: 'Internet Stability' },
-    });
+const CHECK_CONFIG = {
+    backend: { label: 'Backend Server', icon: Server },
+    livekit: { label: 'LiveKit Cloud', icon: Zap },
+    mic: { label: 'Microphone Access', icon: Mic },
+    internet: { label: 'Internet Stability', icon: Globe },
+};
 
+const INITIAL_CHECKS = Object.keys(CHECK_CONFIG).reduce((acc, key) => ({
+    ...acc,
+    [key]: { status: 'idle', label: CHECK_CONFIG[key].label }
+}), {});
+
+export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
+    const [checks, setChecks] = useState(INITIAL_CHECKS);
     const [isRunning, setIsRunning] = useState(false);
 
-    const runChecks = useCallback(async () => {
-        setIsRunning(true);
+    const updateCheckStatus = useCallback((key, status) => {
+        setChecks(prev => ({ ...prev, [key]: { ...prev[key], status } }));
+    }, []);
 
-        // 1. Backend Check
-        setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'running' } }));
+    const runChecks = useCallback(async () => {
+        if (isRunning) return;
+        setIsRunning(true);
+        setChecks(INITIAL_CHECKS);
+
         const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
         let backendHealthy = false;
 
+        // 1. Backend Check
+        updateCheckStatus('backend', 'running');
         try {
             const res = await fetch(`${backendUrl}/health`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.status === 'ok') {
-                    setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'success' } }));
+                    updateCheckStatus('backend', 'success');
                     backendHealthy = true;
-                } else {
-                    throw new Error('Invalid health response');
-                }
-            } else {
-                throw new Error('Backend unreachable');
-            }
+                } else throw new Error('Invalid status');
+            } else throw new Error('Unreachable');
         } catch (e) {
-            setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'error' } }));
+            updateCheckStatus('backend', 'error');
         }
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 400));
 
         // 2. Internet Check
-        setChecks(prev => ({ ...prev, internet: { ...prev.internet, status: 'running' } }));
+        updateCheckStatus('internet', 'running');
         if (navigator.onLine) {
-            setChecks(prev => ({ ...prev, internet: { ...prev.internet, status: 'success' } }));
+            updateCheckStatus('internet', 'success');
         } else {
-            setChecks(prev => ({ ...prev, internet: { ...prev.internet, status: 'error' } }));
+            updateCheckStatus('internet', 'error');
         }
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 400));
 
-        // 3. LiveKit Connection Check (Integration Test via Backend)
-        setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'running' } }));
+        // 3. LiveKit Connection Check
+        updateCheckStatus('livekit', 'running');
         if (backendHealthy) {
             try {
-                // Request a dummy token to verify LiveKit API Key/Secret on backend
                 const res = await fetch(`${backendUrl}/token?room=system-check&name=check-bot`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.token) {
-                        setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'success' } }));
-                    } else {
-                        throw new Error('No token returned');
-                    }
-                } else {
-                    throw new Error('Token endpoint failed');
-                }
+                const data = await res.json();
+                if (res.ok && data.token) {
+                    updateCheckStatus('livekit', 'success');
+                } else throw new Error('Token failed');
             } catch (e) {
-                console.error("LiveKit Check Failed:", e);
-                setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'error' } }));
+                updateCheckStatus('livekit', 'error');
             }
         } else {
-            // Cannot check LiveKit if backend is down
-            setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'error' } }));
+            updateCheckStatus('livekit', 'error');
         }
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 400));
 
         // 4. Mic Check
-        setChecks(prev => ({ ...prev, mic: { ...prev.mic, status: 'running' } }));
+        updateCheckStatus('mic', 'running');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             stream.getTracks().forEach(track => track.stop());
-            setChecks(prev => ({ ...prev, mic: { ...prev.mic, status: 'success' } }));
+            updateCheckStatus('mic', 'success');
         } catch (e) {
-            console.error("Mic Check Failed:", e);
-            setChecks(prev => ({ ...prev, mic: { ...prev.mic, status: 'error' } }));
+            updateCheckStatus('mic', 'error');
         }
 
         setIsRunning(false);
-    }, []);
+    }, [isRunning, updateCheckStatus]);
 
     useEffect(() => {
-        if (isOpen) {
-            runChecks();
-        } else {
-            setChecks({
-                backend: { status: 'idle', label: 'Backend Server' },
-                livekit: { status: 'idle', label: 'LiveKit Cloud' },
-                mic: { status: 'idle', label: 'Microphone Access' },
-                internet: { status: 'idle', label: 'Internet Stability' },
-            });
-        }
-    }, [isOpen]);
+        if (isOpen) runChecks();
+        else setChecks(INITIAL_CHECKS);
+    }, [isOpen, runChecks]);
 
-    const allPassed = Object.values(checks).every(c => c.status === 'success');
-    const allFinished = Object.values(checks).every(c => c.status === 'success' || c.status === 'error');
+    const { allPassed, allFinished } = useMemo(() => {
+        const values = Object.values(checks);
+        return {
+            allPassed: values.every(c => c.status === 'success'),
+            allFinished: values.every(c => c.status === 'success' || c.status === 'error')
+        };
+    }, [checks]);
 
     return (
         <AnimatePresence>
@@ -113,7 +108,7 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-                        onClick={onClose}
+                        onClick={!isRunning ? onClose : undefined}
                     />
 
                     <motion.div
@@ -122,7 +117,6 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
                         exit={{ scale: 0.9, opacity: 0, y: 20 }}
                         className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-white/20"
                     >
-                        {/* Header */}
                         <div className="p-8 bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 text-white relative overflow-hidden">
                             <div className="absolute top-0 right-0 p-4 opacity-10">
                                 <ShieldCheck size={120} />
@@ -130,49 +124,47 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
                             <div className="relative z-10">
                                 <h2 className="text-2xl font-bold flex items-center gap-2">
                                     <ShieldCheck className="w-7 h-7" />
-                                    System Integrity Check
+                                    System Check
                                 </h2>
-                                <p className="text-indigo-100 text-sm mt-1">Verifying your environment for optimal voice AI performance.</p>
+                                <p className="text-indigo-100 text-sm mt-1">Verifying environment for voice AI performance.</p>
                             </div>
                         </div>
 
-                        {/* Body */}
                         <div className="p-8 space-y-6">
                             <div className="grid gap-4">
-                                {Object.entries(checks).map(([key, check]) => (
-                                    <div key={key} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 border border-slate-100 transition-all hover:shadow-sm">
-                                        <div className="flex items-center gap-4">
-                                            <div className={clsx(
-                                                "p-2.5 rounded-xl",
-                                                check.status === 'success' ? "bg-emerald-100 text-emerald-600" :
-                                                    check.status === 'error' ? "bg-rose-100 text-rose-600" :
-                                                        check.status === 'running' ? "bg-blue-100 text-blue-600" : "bg-slate-200 text-slate-500"
-                                            )}>
-                                                {key === 'backend' && <Server size={20} />}
-                                                {key === 'livekit' && <Zap size={20} />}
-                                                {key === 'mic' && <Mic size={20} />}
-                                                {key === 'internet' && <Globe size={20} />}
+                                {Object.entries(checks).map(([key, check]) => {
+                                    const Icon = CHECK_CONFIG[key].icon;
+                                    return (
+                                        <div key={key} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 border border-slate-100 transition-all hover:shadow-sm">
+                                            <div className="flex items-center gap-4">
+                                                <div className={clsx(
+                                                    "p-2.5 rounded-xl",
+                                                    check.status === 'success' ? "bg-emerald-100 text-emerald-600" :
+                                                        check.status === 'error' ? "bg-rose-100 text-rose-600" :
+                                                            check.status === 'running' ? "bg-blue-100 text-blue-600" : "bg-slate-200 text-slate-500"
+                                                )}>
+                                                    <Icon size={20} />
+                                                </div>
+                                                <div>
+                                                    <h3 className="font-semibold text-slate-800 text-sm">{check.label}</h3>
+                                                    <p className="text-xs text-slate-500">
+                                                        {check.status === 'idle' && 'Pending...'}
+                                                        {check.status === 'running' && 'Checking...'}
+                                                        {check.status === 'success' && 'Ready'}
+                                                        {check.status === 'error' && 'Action Required'}
+                                                    </p>
+                                                </div>
                                             </div>
                                             <div>
-                                                <h3 className="font-semibold text-slate-800 text-sm">{check.label}</h3>
-                                                <p className="text-xs text-slate-500">
-                                                    {check.status === 'idle' && 'Pending check...'}
-                                                    {check.status === 'running' && 'In progress...'}
-                                                    {check.status === 'success' && 'Connection secure'}
-                                                    {check.status === 'error' && 'Failed to connect'}
-                                                </p>
+                                                {check.status === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-500" />}
+                                                {check.status === 'error' && <XCircle className="w-6 h-6 text-rose-500" />}
+                                                {check.status === 'running' && <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />}
                                             </div>
                                         </div>
-                                        <div>
-                                            {check.status === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-500" />}
-                                            {check.status === 'error' && <XCircle className="w-6 h-6 text-rose-500" />}
-                                            {check.status === 'running' && <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />}
-                                        </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
 
-                            {/* Footer */}
                             <div className="pt-4">
                                 <button
                                     disabled={!allFinished || isRunning}
@@ -187,16 +179,16 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
                                     )}
                                 >
                                     {allPassed ? (
-                                        <>Continue to VoxNexus <ArrowRight size={20} /></>
+                                        <>Continue <ArrowRight size={20} /></>
                                     ) : !allFinished ? (
-                                        <>Running Checks... <Loader2 size={20} className="animate-spin" /></>
+                                        <>Verifying... <Loader2 size={20} className="animate-spin" /></>
                                     ) : (
-                                        <>Retry System Check</>
+                                        <>Retry Check</>
                                     )}
                                 </button>
                                 {allFinished && !allPassed && (
                                     <p className="text-center text-xs text-rose-500 mt-3 font-medium">
-                                        Please fix the highlighted issues and retry.
+                                        Please fix the errors and try again.
                                     </p>
                                 )}
                             </div>
