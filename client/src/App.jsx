@@ -2,8 +2,6 @@ import { useState, useCallback, useEffect } from 'react';
 import { useLiveKit } from './hooks/useLiveKit';
 import { Mic, MicOff, Activity, MessageSquare, Wifi, WifiOff, AlertCircle, Zap, TrendingUp, Globe, PhoneOff, ShieldCheck } from 'lucide-react';
 import clsx from 'clsx';
-import { BackgroundGradient } from './components/ui/background-gradient';
-import { HoverBorderGradient } from './components/ui/hover-border-gradient';
 import { CardContainer, CardBody, CardItem } from './components/ui/3d-card';
 import { SystemCheckModal } from './components/SystemCheckModal';
 
@@ -17,7 +15,7 @@ function App() {
     const [currentLanguage, setCurrentLanguage] = useState('en');
     const [isSystemCheckOpen, setIsSystemCheckOpen] = useState(false);
 
-    // Run system check on mount
+    // Initial system check
     useEffect(() => {
         const hasChecked = sessionStorage.getItem('vox_nexus_system_checked');
         if (!hasChecked) {
@@ -25,6 +23,7 @@ function App() {
         }
     }, []);
 
+    // Sync language when agent connects
     useEffect(() => {
         if (isConnected && agentConnected) {
             setLanguage(currentLanguage);
@@ -34,7 +33,14 @@ function App() {
     const fetchToken = async () => {
         try {
             const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
-            const response = await fetch(`${backendUrl}/token?room=vox-nexus&name=user-` + Math.floor(Math.random() * 1000));
+            // Use a consistent user ID or random for demo
+            const userId = `user-${Math.floor(Math.random() * 1000)}`;
+            const response = await fetch(`${backendUrl}/token?room=vox-nexus&name=${userId}`);
+
+            if (!response.ok) {
+                throw new Error(`Failed to fetch token: ${response.statusText}`);
+            }
+
             const data = await response.json();
             setToken(data.token);
             return data.token;
@@ -57,10 +63,6 @@ function App() {
         }
     };
 
-    useEffect(() => {
-        // Stats collection temporarily disabled to prevent crashes
-    }, [room, isConnected]);
-
     const getConnectionQualityColor = () => {
         switch (connectionQuality) {
             case 'excellent': return 'text-emerald-600';
@@ -74,8 +76,8 @@ function App() {
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 text-gray-900 font-sans selection:bg-indigo-200">
 
             {/* Decorative Background Elements */}
-            <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-br from-blue-400/20 to-indigo-400/20 rounded-full blur-3xl" />
-            <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-purple-400/20 to-pink-400/20 rounded-full blur-3xl" />
+            <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-br from-blue-400/20 to-indigo-400/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-purple-400/20 to-pink-400/20 rounded-full blur-3xl pointer-events-none" />
 
             <div className="max-w-7xl mx-auto p-6 flex flex-col h-screen relative z-10">
 
@@ -122,9 +124,9 @@ function App() {
                     <div className="lg:col-span-1 space-y-6">
 
                         {/* Connection Card */}
-                        <CardContainer>
-                            <CardBody>
-                                <div className="p-6 rounded-2xl bg-white shadow-xl border border-gray-200/50 backdrop-blur-sm">
+                        <CardContainer className="h-full">
+                            <CardBody className="h-full">
+                                <div className="p-6 rounded-2xl bg-white shadow-xl border border-gray-200/50 backdrop-blur-sm h-full flex flex-col justify-between">
                                     <CardItem translateZ={20}>
                                         <div className="flex items-center gap-2 mb-6">
                                             <Zap className="w-5 h-5 text-indigo-600" />
@@ -132,7 +134,7 @@ function App() {
                                         </div>
                                     </CardItem>
 
-                                    <CardItem translateZ={40}>
+                                    <CardItem translateZ={40} className="w-full">
                                         <div className="space-y-4">
                                             <div className="flex items-center justify-between p-3 bg-gray-50/80 rounded-xl border border-gray-100 mb-2">
                                                 <div className="flex items-center gap-2">
@@ -201,9 +203,9 @@ function App() {
                                             </div>
 
                                             {isRecording && (
-                                                <div className="flex items-center justify-center gap-2 text-sm text-rose-600 font-medium">
-                                                    <div className="w-2 h-2 bg-rose-500 rounded-full animate-ping" />
-                                                    Recording...
+                                                <div className="flex items-center justify-center gap-2 text-sm text-rose-600 font-medium animate-pulse">
+                                                    <div className="w-2 h-2 bg-rose-500 rounded-full" />
+                                                    Live
                                                 </div>
                                             )}
                                         </div>

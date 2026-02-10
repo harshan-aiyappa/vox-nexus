@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Room, RoomEvent, createLocalAudioTrack, ConnectionState } from 'livekit-client';
+import { Room, RoomEvent, createLocalAudioTrack, Track } from 'livekit-client';
 
 export const useLiveKit = (defaultUrl) => {
     const [room, setRoom] = useState(null);
@@ -7,6 +7,9 @@ export const useLiveKit = (defaultUrl) => {
     const [connectionState, setConnectionState] = useState('disconnected');
     const [transcripts, setTranscripts] = useState([]);
     const [connectionQuality, setConnectionQuality] = useState('excellent');
+    const [micEnabled, setMicEnabled] = useState(true);
+    const [agentConnected, setAgentConnected] = useState(false);
+
     const roomRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const reconnectAttemptsRef = useRef(0);
@@ -19,58 +22,57 @@ export const useLiveKit = (defaultUrl) => {
             return;
         }
 
+        // Cleanup existing room
+        if (roomRef.current) {
+            await roomRef.current.disconnect();
+        }
+
         const newRoom = new Room({
             adaptiveStream: true,
             dynacast: true,
-            // iOS compatibility
             audioCaptureDefaults: {
                 autoGainControl: true,
                 echoCancellation: true,
                 noiseSuppression: true,
-                sampleRate: 48000, // Lock to 48kHz for iOS compatibility
+                sampleRate: 48000,
             },
         });
 
         roomRef.current = newRoom;
 
-        // Connection state monitoring
-        newRoom
-            .on(RoomEvent.Connected, () => {
-                console.log('✅ Room Connected');
-                setConnectionState('connected');
-                setIsConnected(true); // Ensure isConnected is true
-                reconnectAttemptsRef.current = 0; // Reset attempts on successful connection
-            })
-            .on(RoomEvent.Reconnecting, () => {
-                console.log('🔄 Reconnecting to Room...');
-                setConnectionState('reconnecting');
-            })
-            .on(RoomEvent.Reconnected, () => {
-                console.log('✅ Room Reconnected');
-                setConnectionState('connected');
-                setIsConnected(true); // Ensure isConnected is true
-                reconnectAttemptsRef.current = 0; // Reset attempts on successful reconnection
-            })
-            .on(RoomEvent.Disconnected, (reason) => {
-                console.log(`❌ Room Disconnected. Reason: ${reason}`);
-                setConnectionState('disconnected');
-                setIsConnected(false);
-                // handleReconnect(token, url); // Reconnect logic disabled by user request
-            })
-            .on(RoomEvent.ConnectionStateChanged, (state) => {
-                console.log('Connection state:', state);
-                // The specific handlers above cover most cases, but this can catch others if needed.
-                // We keep this for general logging, but the specific handlers manage `isConnected` and `connectionState`.
-            });
+        // --- Event Handlers ---
 
-        // Connection quality monitoring
+        newRoom.on(RoomEvent.Connected, () => {
+            console.log('✅ Room Connected');
+            setConnectionState('connected');
+            setIsConnected(true);
+            reconnectAttemptsRef.current = 0;
+        });
+
+        newRoom.on(RoomEvent.Reconnecting, () => {
+            console.log('🔄 Reconnecting...');
+            setConnectionState('reconnecting');
+        });
+
+        newRoom.on(RoomEvent.Reconnected, () => {
+            console.log('✅ Room Reconnected');
+            setConnectionState('connected');
+            setIsConnected(true);
+            reconnectAttemptsRef.current = 0;
+        });
+
+        newRoom.on(RoomEvent.Disconnected, (reason) => {
+            console.log(`❌ Room Disconnected: ${reason}`);
+            setConnectionState('disconnected');
+            setIsConnected(false);
+        });
+
         newRoom.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
             if (participant.isLocal) {
                 setConnectionQuality(quality);
             }
         });
 
-        // Data received handler
         newRoom.on(RoomEvent.DataReceived, (payload, participant) => {
             const decoder = new TextDecoder();
             const str = decoder.decode(payload);
@@ -84,136 +86,73 @@ export const useLiveKit = (defaultUrl) => {
             }
         });
 
-        // Track subscribed handler
         newRoom.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-            console.log(`🎧 Track Subscribed: ${track.kind} from ${participant.identity} (sid: ${participant.sid})`);
+            console.log(`🎧 Track Subscribed: ${track.kind} from ${participant.identity}`);
             if (track.kind === Track.Kind.Audio) {
-                track.attach(); // Attach audio tracks to play them
+                track.attach();
             }
         });
 
-        // Track unsubscribed handler
         newRoom.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
             console.log(`🔇 Track Unsubscribed: ${track.kind} from ${participant.identity}`);
-            track.detach(); // Detach tracks when unsubscribed
+            track.detach();
         });
 
-        if (token) {
-            console.log("🔗 Connecting to LiveKit room with token...");
-            try {
-                await newRoom.connect(wsUrl, token);
+        const checkAgents = () => {
+            const participants = Array.from(newRoom.remoteParticipants.values());
+            const hasAgent = participants.some(p => p.identity.startsWith('agent-') || p.kind === 'agent');
+            setAgentConnected(hasAgent);
+        };
 
-                // Publish Microphone with iOS-compatible settings
-                const track = await createLocalAudioTrack({
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 48000,
-                });
+        newRoom.on(RoomEvent.ParticipantConnected, checkAgents);
+        newRoom.on(RoomEvent.ParticipantDisconnected, checkAgents);
 
-                await newRoom.localParticipant.publishTrack(track, {
-                    name: 'microphone',
-                    source: 'microphone',
-                });
+        try {
+            console.log("🔗 Connecting to LiveKit room...");
+            await newRoom.connect(wsUrl, token);
 
-                setRoom(newRoom);
-                // setIsConnected(true); // Handled by RoomEvent.Connected
-                console.log("✅ Successfully connected to LiveKit!");
-            } catch (err) {
-                console.error("❌ Failed to connect to LiveKit:", err);
-                setError(err); // Set error state
-                // setIsConnected(false); // Handled by RoomEvent.Disconnected or error
-                handleReconnect(token, url);
-            }
+            // Publish Microphone
+            const track = await createLocalAudioTrack({
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: 48000,
+            });
+
+            await newRoom.localParticipant.publishTrack(track, {
+                name: 'microphone',
+                source: 'microphone',
+            });
+
+            setRoom(newRoom);
+            // Initial agent check
+            checkAgents();
+
+        } catch (err) {
+            console.error("❌ Failed to connect to LiveKit:", err);
+            setIsConnected(false);
         }
     }, [defaultUrl]);
-
-    const handleReconnect = useCallback((token, url) => {
-        if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-            console.error('Max reconnection attempts reached');
-            return;
-        }
-
-        reconnectAttemptsRef.current += 1;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000); // Exponential backoff, max 30s
-
-        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})`);
-
-        reconnectTimeoutRef.current = setTimeout(() => {
-            connect(token, url);
-        }, delay);
-    }, [connect]);
 
     const disconnect = useCallback(async () => {
         if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
         }
-
         if (roomRef.current) {
             await roomRef.current.disconnect();
-            setRoom(null);
-            setIsConnected(false);
             roomRef.current = null;
-            reconnectAttemptsRef.current = 0;
         }
+        setRoom(null);
+        setIsConnected(false);
+        setConnectionState('disconnected');
     }, []);
 
-    // iOS resume handling
-    useEffect(() => {
-        const handleVisibilityChange = async () => {
-            if (document.visibilityState === 'visible' && roomRef.current && !isConnected) {
-                console.log('App resumed, checking connection...');
-                // Try to resume audio context on iOS
-                if (roomRef.current.localParticipant) {
-                    const audioTracks = Array.from(roomRef.current.localParticipant.audioTracks.values());
-                    for (const pub of audioTracks) {
-                        if (pub.track) {
-                            await pub.track.restartTrack();
-                        }
-                    }
-                }
-            }
-        };
-
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-
-        return () => {
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
-    }, [isConnected]);
-
-    useEffect(() => {
-        return () => {
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
-            }
-            if (roomRef.current) {
-                roomRef.current.disconnect();
-            }
-        };
-    }, []);
-
-    const [agentConnected, setAgentConnected] = useState(false);
-
-    useEffect(() => {
+    const toggleMicrophone = async () => {
         if (!room) return;
-
-        const checkAgents = () => {
-            const participants = Array.from(room.remoteParticipants.values());
-            const hasAgent = participants.some(p => p.identity.startsWith('agent-') || p.kind === 'agent');
-            setAgentConnected(hasAgent);
-            console.log('Worker/Agent Status:', hasAgent ? 'Online' : 'Offline', participants.map(p => p.identity));
-        };
-
-        room.on(RoomEvent.ParticipantConnected, checkAgents);
-        room.on(RoomEvent.ParticipantDisconnected, checkAgents);
-        checkAgents(); // Initial check
-
-        return () => {
-            room.off(RoomEvent.ParticipantConnected, checkAgents);
-            room.off(RoomEvent.ParticipantDisconnected, checkAgents);
-        };
-    }, [room]);
+        const newState = !micEnabled;
+        await room.localParticipant.setMicrophoneEnabled(newState);
+        setMicEnabled(newState);
+    };
 
     const setLanguage = async (langCode) => {
         if (!room) return;
@@ -223,14 +162,43 @@ export const useLiveKit = (defaultUrl) => {
         await room.localParticipant.publishData(data, { reliable: true });
     };
 
-    const [micEnabled, setMicEnabled] = useState(true);
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            disconnect();
+        };
+    }, [disconnect]);
 
-    const toggleMicrophone = async () => {
-        if (!room) return;
-        const newState = !micEnabled;
-        await room.localParticipant.setMicrophoneEnabled(newState);
-        setMicEnabled(newState);
+    // iOS resume handling
+    useEffect(() => {
+        const handleVisibilityChange = async () => {
+            if (document.visibilityState === 'visible' && roomRef.current && !isConnected) {
+                if (roomRef.current.localParticipant) {
+                    const audioTracks = Array.from(roomRef.current.localParticipant.audioTracks.values());
+                    for (const pub of audioTracks) {
+                        if (pub.track) {
+                            // Attempt to restart or resume if needed (mostly handled by browser, but good for some contexts)
+                            // pub.track.restartTrack(); 
+                        }
+                    }
+                }
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [isConnected]);
+
+    return {
+        connect,
+        disconnect,
+        isConnected,
+        connectionState,
+        transcripts,
+        room,
+        connectionQuality,
+        agentConnected,
+        setLanguage,
+        toggleMicrophone,
+        micEnabled
     };
-
-    return { connect, disconnect, isConnected, connectionState, transcripts, room, connectionQuality, agentConnected, setLanguage, toggleMicrophone, micEnabled };
 };
