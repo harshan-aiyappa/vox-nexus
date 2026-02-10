@@ -43,6 +43,8 @@ async def entrypoint(ctx: JobContext):
             logger.info("✅ Whisper Model Loaded Successfully!")
         except Exception as e:
             logger.error(f"❌ Failed to load Whisper Model: {e}")
+    elif model:
+        logger.info("🧠 Model already loaded (cached).")
 
     # State for dynamic language (per room/job)
     current_language = "en"
@@ -167,8 +169,11 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"🔇 [END_STREAM] {participant.identity}")
 
     @ctx.room.on("track_published")
-    def on_track_published(publication, participant):
+    def on_track_published(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
         logger.info(f"hw_event_mic: 🛰️ [TRACK_PUBLISHED] {publication.sid} ({publication.kind}) from {participant.identity}")
+        if publication.kind == rtc.TrackKind.KIND_AUDIO:
+            logger.info(f"🔌 [MANUAL_SUB] Subscribing to audio track {publication.sid}")
+            publication.set_subscribed(True)
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track, publication, participant):
