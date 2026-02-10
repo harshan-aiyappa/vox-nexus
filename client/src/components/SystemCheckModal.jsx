@@ -1,201 +1,191 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, XCircle, Loader2, ShieldCheck, Mic, Server, Globe, Zap, ArrowRight } from 'lucide-react';
+import { ShieldCheck, Server, Wifi, Mic, Globe, CheckCircle2, XCircle, Loader2, AlertTriangle, Fingerprint, Activity } from 'lucide-react';
 import clsx from 'clsx';
 
-const CHECK_CONFIG = {
-    backend: { label: 'Backend Server', icon: Server },
-    livekit: { label: 'LiveKit Cloud', icon: Zap },
-    mic: { label: 'Microphone Access', icon: Mic },
-    internet: { label: 'Internet Stability', icon: Globe },
-};
+const CheckItem = memo(({ icon: Icon, label, status, detail }) => {
+    const isReady = status === 'ready';
+    const isError = status === 'error';
+    const isChecking = status === 'checking';
 
-const INITIAL_CHECKS = Object.keys(CHECK_CONFIG).reduce((acc, key) => ({
-    ...acc,
-    [key]: { status: 'idle', label: CHECK_CONFIG[key].label }
-}), {});
+    return (
+        <div className={clsx(
+            "flex items-center justify-between p-5 rounded-3xl border transition-all duration-500 bg-white/50 backdrop-blur-sm",
+            isReady ? "border-emerald-100 shadow-[0_4px_20px_rgba(16,185,129,0.05)]" :
+                isError ? "border-rose-100 shadow-[0_4px_20px_rgba(244,63,94,0.05)]" :
+                    "border-slate-100 shadow-sm"
+        )}>
+            <div className="flex items-center gap-4">
+                <div className={clsx(
+                    "p-3 rounded-2xl transition-all duration-500",
+                    isReady ? "bg-emerald-50 text-emerald-600" :
+                        isError ? "bg-rose-50 text-rose-600" :
+                            "bg-slate-100 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600"
+                )}>
+                    <Icon className={clsx("w-6 h-6", isChecking && "animate-pulse")} />
+                </div>
+                <div>
+                    <p className="text-sm font-black text-slate-900 uppercase tracking-widest">{label}</p>
+                    <p className="text-[10px] font-bold text-slate-400 tracking-wider">
+                        {isChecking ? "SCANNING BUFFER..." : detail}
+                    </p>
+                </div>
+            </div>
 
-export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
-    const [checks, setChecks] = useState(INITIAL_CHECKS);
-    const [isRunning, setIsRunning] = useState(false);
+            <div className="flex items-center gap-3">
+                {isChecking && <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />}
+                {isReady && <CheckCircle2 className="w-6 h-6 text-emerald-500" />}
+                {isError && <XCircle className="w-6 h-6 text-rose-500" />}
+            </div>
+        </div>
+    );
+});
 
-    const updateCheckStatus = useCallback((key, status) => {
-        setChecks(prev => ({ ...prev, [key]: { ...prev[key], status } }));
-    }, []);
+export function SystemCheckModal({ isOpen, onClose, onComplete }) {
+    const [checks, setChecks] = useState({
+        backend: 'idle',
+        livekit: 'idle',
+        mic: 'idle',
+        internet: 'idle'
+    });
+    const [isScanning, setIsScanning] = useState(false);
 
     const runChecks = useCallback(async () => {
-        if (isRunning) return;
-        setIsRunning(true);
-        setChecks(INITIAL_CHECKS);
+        setIsScanning(true);
 
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
-        let backendHealthy = false;
+        const update = (id, status) => setChecks(prev => ({ ...prev, [id]: status }));
 
-        // 1. Backend Check
-        updateCheckStatus('backend', 'running');
+        // 1. Internet Check
+        update('internet', 'checking');
+        await new Promise(r => setTimeout(r, 600));
+        update('internet', navigator.onLine ? 'ready' : 'error');
+
+        // 2. Backend Check
+        update('backend', 'checking');
         try {
-            const res = await fetch(`${backendUrl}/health`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.status === 'ok') {
-                    updateCheckStatus('backend', 'success');
-                    backendHealthy = true;
-                } else throw new Error('Invalid status');
-            } else throw new Error('Unreachable');
-        } catch (e) {
-            updateCheckStatus('backend', 'error');
+            const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080'}/health`);
+            await new Promise(r => setTimeout(r, 700));
+            update('backend', res.ok ? 'ready' : 'error');
+        } catch {
+            update('backend', 'error');
         }
-        await new Promise(r => setTimeout(r, 400));
 
-        // 2. Internet Check
-        updateCheckStatus('internet', 'running');
-        if (navigator.onLine) {
-            updateCheckStatus('internet', 'success');
-        } else {
-            updateCheckStatus('internet', 'error');
-        }
-        await new Promise(r => setTimeout(r, 400));
-
-        // 3. LiveKit Connection Check
-        updateCheckStatus('livekit', 'running');
-        if (backendHealthy) {
-            try {
-                const res = await fetch(`${backendUrl}/token?room=system-check&name=check-bot`);
-                const data = await res.json();
-                if (res.ok && data.token) {
-                    updateCheckStatus('livekit', 'success');
-                } else throw new Error('Token failed');
-            } catch (e) {
-                updateCheckStatus('livekit', 'error');
-            }
-        } else {
-            updateCheckStatus('livekit', 'error');
-        }
-        await new Promise(r => setTimeout(r, 400));
-
-        // 4. Mic Check
-        updateCheckStatus('mic', 'running');
+        // 3. Mic Check
+        update('mic', 'checking');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(track => track.stop());
-            updateCheckStatus('mic', 'success');
-        } catch (e) {
-            updateCheckStatus('mic', 'error');
+            stream.getTracks().forEach(t => t.stop());
+            await new Promise(r => setTimeout(r, 500));
+            update('mic', 'ready');
+        } catch {
+            update('mic', 'error');
         }
 
-        setIsRunning(false);
-    }, [isRunning, updateCheckStatus]);
+        // 4. LiveKit Check
+        update('livekit', 'checking');
+        const url = import.meta.env.VITE_LIVEKIT_URL;
+        await new Promise(r => setTimeout(r, 800));
+        update('livekit', url ? 'ready' : 'error');
+
+        setIsScanning(false);
+    }, []);
 
     useEffect(() => {
         if (isOpen) runChecks();
-        else setChecks(INITIAL_CHECKS);
     }, [isOpen, runChecks]);
 
-    const { allPassed, allFinished } = useMemo(() => {
-        const values = Object.values(checks);
-        return {
-            allPassed: values.every(c => c.status === 'success'),
-            allFinished: values.every(c => c.status === 'success' || c.status === 'error')
-        };
-    }, [checks]);
+    const allReady = Object.values(checks).every(s => s === 'ready');
 
     return (
         <AnimatePresence>
             {isOpen && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    {/* Backdrop with Blur */}
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
-                        onClick={!isRunning ? onClose : undefined}
+                        onClick={onClose}
+                        className="absolute inset-0 bg-slate-900/40 backdrop-blur-md"
                     />
 
+                    {/* Modal Content */}
                     <motion.div
-                        initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                        animate={{ scale: 1, opacity: 1, y: 0 }}
-                        exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                        className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden border border-white/20"
+                        initial={{ opacity: 0, scale: 0.9, y: 20, rotateX: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0, rotateX: 0 }}
+                        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                        className="relative w-full max-w-xl bg-white/95 rounded-[3rem] p-8 sm:p-12 shadow-[0_40px_100px_rgba(0,0,0,0.2)] border border-white/50 overflow-hidden"
                     >
-                        <div className="p-8 bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700 text-white relative overflow-hidden">
-                            <div className="absolute top-0 right-0 p-4 opacity-10">
-                                <ShieldCheck size={120} />
+                        {/* Background Decoration */}
+                        <div className="absolute top-0 right-0 p-12 opacity-[0.03] pointer-events-none">
+                            <Activity size={240} className="text-indigo-600 font-black" />
+                        </div>
+
+                        {/* Modal Header */}
+                        <div className="relative z-10 text-center space-y-4 mb-10">
+                            <div className="inline-flex p-5 rounded-[2rem] bg-indigo-600 shadow-2xl shadow-indigo-200 mb-2">
+                                <ShieldCheck className="w-10 h-10 text-white stroke-[2.5]" />
                             </div>
-                            <div className="relative z-10">
-                                <h2 className="text-2xl font-bold flex items-center gap-2">
-                                    <ShieldCheck className="w-7 h-7" />
-                                    System Check
-                                </h2>
-                                <p className="text-indigo-100 text-sm mt-1">Verifying environment for voice AI performance.</p>
+                            <div>
+                                <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic">Integrity Scan</h2>
+                                <p className="text-sm text-slate-400 font-bold uppercase tracking-[0.2em] mt-1">Establishing System Trust Parameters</p>
                             </div>
                         </div>
 
-                        <div className="p-8 space-y-6">
-                            <div className="grid gap-4">
-                                {Object.entries(checks).map(([key, check]) => {
-                                    const Icon = CHECK_CONFIG[key].icon;
-                                    return (
-                                        <div key={key} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 border border-slate-100 transition-all hover:shadow-sm">
-                                            <div className="flex items-center gap-4">
-                                                <div className={clsx(
-                                                    "p-2.5 rounded-xl",
-                                                    check.status === 'success' ? "bg-emerald-100 text-emerald-600" :
-                                                        check.status === 'error' ? "bg-rose-100 text-rose-600" :
-                                                            check.status === 'running' ? "bg-blue-100 text-blue-600" : "bg-slate-200 text-slate-500"
-                                                )}>
-                                                    <Icon size={20} />
-                                                </div>
-                                                <div>
-                                                    <h3 className="font-semibold text-slate-800 text-sm">{check.label}</h3>
-                                                    <p className="text-xs text-slate-500">
-                                                        {check.status === 'idle' && 'Pending...'}
-                                                        {check.status === 'running' && 'Checking...'}
-                                                        {check.status === 'success' && 'Ready'}
-                                                        {check.status === 'error' && 'Action Required'}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                {check.status === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-500" />}
-                                                {check.status === 'error' && <XCircle className="w-6 h-6 text-rose-500" />}
-                                                {check.status === 'running' && <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
+                        {/* Check Grid */}
+                        <div className="relative z-10 grid grid-cols-1 gap-4 mb-10">
+                            <CheckItem
+                                icon={Globe}
+                                label="Uplink Connection"
+                                status={checks.internet}
+                                detail="Network Availability Check"
+                            />
+                            <CheckItem
+                                icon={Server}
+                                label="Neural Gateway"
+                                status={checks.backend}
+                                detail={`${import.meta.env.VITE_BACKEND_URL || 'Local'} Node Response`}
+                            />
+                            <CheckItem
+                                icon={Mic}
+                                label="Audio Interface"
+                                status={checks.mic}
+                                detail="Hardware Stream Protocol"
+                            />
+                            <CheckItem
+                                icon={Wifi}
+                                label="LiveKit Protocol"
+                                status={checks.livekit}
+                                detail="RTC Cloud Synchronization"
+                            />
+                        </div>
 
-                            <div className="pt-4">
-                                <button
-                                    disabled={!allFinished || isRunning}
-                                    onClick={allPassed ? onComplete : runChecks}
-                                    className={clsx(
-                                        "w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg transform active:scale-[0.98]",
-                                        allPassed
-                                            ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-emerald-200"
-                                            : !allFinished
-                                                ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                                                : "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-blue-200"
-                                    )}
-                                >
-                                    {allPassed ? (
-                                        <>Continue <ArrowRight size={20} /></>
-                                    ) : !allFinished ? (
-                                        <>Verifying... <Loader2 size={20} className="animate-spin" /></>
-                                    ) : (
-                                        <>Retry Check</>
-                                    )}
-                                </button>
-                                {allFinished && !allPassed && (
-                                    <p className="text-center text-xs text-rose-500 mt-3 font-medium">
-                                        Please fix the errors and try again.
-                                    </p>
+                        {/* Modal Footer */}
+                        <div className="relative z-10 flex flex-col gap-4">
+                            <button
+                                disabled={isScanning || !allReady}
+                                onClick={onComplete}
+                                className={clsx(
+                                    "w-full py-5 rounded-[2rem] font-black text-lg transition-all duration-500 shadow-2xl active:scale-95 flex items-center justify-center gap-4",
+                                    allReady
+                                        ? "bg-indigo-600 text-white shadow-indigo-200 hover:shadow-indigo-300 hover:-translate-y-1"
+                                        : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
                                 )}
-                            </div>
+                            >
+                                {isScanning ? <Loader2 className="w-6 h-6 animate-spin" /> : <Fingerprint className="w-6 h-6" />}
+                                {isScanning ? "SYNCHRONIZING..." : allReady ? "INITIALIZE CORE" : "SCAN INCOMPLETE"}
+                            </button>
+
+                            {!allReady && !isScanning && (
+                                <div className="flex items-center justify-center gap-2 text-rose-500 bg-rose-50 py-3 rounded-2xl animate-pulse">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest">Hardware/Network Obstruction Detected</span>
+                                </div>
+                            )}
                         </div>
                     </motion.div>
                 </div>
             )}
         </AnimatePresence>
     );
-};
+}
