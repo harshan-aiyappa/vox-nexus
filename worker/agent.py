@@ -90,54 +90,43 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"🎧 [START_STREAM] {participant.identity} (sid: {participant.sid})")
         audio_stream = rtc.AudioStream(track, sample_rate=16000, num_channels=1)
         
-        accumulated_data = [] 
-        accumulated_samples = 0
-        peak_vol = 0
-        SAMPLE_RATE = 16000
-        CHUNK_SECONDS = 2.0 # Reduced to 2s for better responsiveness
-        BUFFER_SIZE = int(SAMPLE_RATE * CHUNK_SECONDS)
+        # Optimization: Use bytearray for O(1) appends
+        audio_buffer = bytearray()
         
-        # Keep track of last processing time to avoid overlap if needed
-        processing_task = None
+        SAMPLE_RATE = 16000
+        CHUNK_SECONDS = 2.0 
+        BYTES_PER_SAMPLE = 2 # int16
+        BUFFER_SIZE_BYTES = int(SAMPLE_RATE * CHUNK_SECONDS * BYTES_PER_SAMPLE)
         
         async for event in audio_stream:
-            frame = event.frame
-            
-            if accumulated_samples == 0:
-                 logger.debug(f"🔍 [AUDIO_FRAME] {frame.sample_rate}Hz, Channels: {frame.num_channels}, {len(frame.data)} bytes")
+            audio_buffer.extend(event.frame.data.tobytes())
 
-            arr = np.frombuffer(frame.data, dtype=np.int16)
-            
-            current_max = np.abs(arr).max() if len(arr) > 0 else 0
-            if current_max > peak_vol:
-                peak_vol = current_max
-
-            accumulated_data.append(arr)
-            accumulated_samples += len(arr)
-
-            # Process if buffer full AND (previous task done OR no task)
-            # Simple approach: just process every chunk for now, blocking slightly (asyncio.to_thread would be better but keeping it simple)
-            if accumulated_samples >= BUFFER_SIZE:
+            if len(audio_buffer) >= BUFFER_SIZE_BYTES:
                  start_time = time.time()
-                 logger.info(f"📊 [PROCESS_CHUNK] Peak Volume: {peak_vol:.4f}")
                  
-                 # Pre-check volume threshold to skip silence
-                 if peak_vol < 100: # Very low threshold
-                     logger.debug(f"🔇 [SKIP_SILENCE] Volume too low ({peak_vol})")
-                     accumulated_data = [] # Keep only last bit? No, clear for now.
-                     accumulated_samples = 0
-                     peak_vol = 0
+                 # Create Read-Only View
+                 # IMPORTANT: This view is tied to audio_buffer. We must process or copy before clearing buffer.
+                 full_arr_view = np.frombuffer(audio_buffer, dtype=np.int16)
+                 
+                 peak_vol = np.abs(full_arr_view).max() if len(full_arr_view) > 0 else 0
+                 logger.info(f"📊 [PROCESS_CHUNK] Peak: {peak_vol:.4f} | Size: {len(audio_buffer)}")
+                 
+                 # Optimization: specific check to skip silence efficiently
+                 if peak_vol < 100: 
+                     audio_buffer.clear()
                      continue
 
-                 full_arr = np.concatenate(accumulated_data)
-                 float_arr = full_arr.astype(np.float32) / 32768.0
+                 # Create float array (this performs a copy and type conversion, safe to clear buffer after)
+                 float_arr = full_arr_view.astype(np.float32) / 32768.0
+                 
+                 # Now safe to clear buffer
+                 audio_buffer.clear()
                  
                  if model:
                      try:
                          # Log VAD/Inference start
                          logger.info(f"🤖 [INFERENCE_START] Language: {current_language}")
                          
-                         # Execute in thread executor to not block heartbeat
                          loop = asyncio.get_running_loop()
                          
                          def run_inference():
@@ -158,7 +147,7 @@ async def entrypoint(ctx: JobContext):
                          inference_duration = time.time() - start_time
                          
                          if cleaned_text:
-                             logger.info(f"📝 [TRANSCRIPTION] '{cleaned_text}' (Lat: {inference_duration:.3f}s | Lang: {current_language})")
+                             logger.info(f"📝 [TRANSCRIPTION] '{cleaned_text}' (Lat: {inference_duration:.3f}s)")
                              payload = json.dumps({
                                  "type": "transcription", 
                                  "text": cleaned_text, 
@@ -167,18 +156,11 @@ async def entrypoint(ctx: JobContext):
                                  "latency_ms": int(inference_duration * 1000)
                              })
                              await ctx.room.local_participant.publish_data(payload, reliable=True)
-                         else:
-                             if text:
-                                 logger.info(f"🗑️ [FILTERED] '{text}' (Hallucination)")
-                             else:
-                                 logger.debug(f"🤐 [SILENCE] (Lat: {inference_duration:.3f}s)")
+                         elif text:
+                             logger.info(f"🗑️ [FILTERED] '{text}'")
                              
                      except Exception as e:
                          logger.error(f"❌ [ERROR] Transcription failed: {e}")
-                 
-                 accumulated_data = []
-                 accumulated_samples = 0
-                 peak_vol = 0
                  
         logger.info(f"🔇 [END_STREAM] {participant.identity}")
 

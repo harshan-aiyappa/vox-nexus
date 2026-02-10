@@ -13,18 +13,26 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
 
     const [isRunning, setIsRunning] = useState(false);
 
-    const runChecks = async () => {
+    const runChecks = useCallback(async () => {
         setIsRunning(true);
 
         // 1. Backend Check
         setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'running' } }));
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
+        let backendHealthy = false;
+
         try {
-            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
             const res = await fetch(`${backendUrl}/health`);
             if (res.ok) {
-                setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'success' } }));
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'success' } }));
+                    backendHealthy = true;
+                } else {
+                    throw new Error('Invalid health response');
+                }
             } else {
-                throw new Error();
+                throw new Error('Backend unreachable');
             }
         } catch (e) {
             setChecks(prev => ({ ...prev, backend: { ...prev.backend, status: 'error' } }));
@@ -40,12 +48,28 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
         }
         await new Promise(r => setTimeout(r, 600));
 
-        // 3. LiveKit Check (Ping the wss URL base or just check env)
+        // 3. LiveKit Connection Check (Integration Test via Backend)
         setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'running' } }));
-        const lkUrl = import.meta.env.VITE_LIVEKIT_URL;
-        if (lkUrl && lkUrl.startsWith('wss://')) {
-            setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'success' } }));
+        if (backendHealthy) {
+            try {
+                // Request a dummy token to verify LiveKit API Key/Secret on backend
+                const res = await fetch(`${backendUrl}/token?room=system-check&name=check-bot`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.token) {
+                        setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'success' } }));
+                    } else {
+                        throw new Error('No token returned');
+                    }
+                } else {
+                    throw new Error('Token endpoint failed');
+                }
+            } catch (e) {
+                console.error("LiveKit Check Failed:", e);
+                setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'error' } }));
+            }
         } else {
+            // Cannot check LiveKit if backend is down
             setChecks(prev => ({ ...prev, livekit: { ...prev.livekit, status: 'error' } }));
         }
         await new Promise(r => setTimeout(r, 600));
@@ -57,11 +81,12 @@ export const SystemCheckModal = ({ isOpen, onClose, onComplete }) => {
             stream.getTracks().forEach(track => track.stop());
             setChecks(prev => ({ ...prev, mic: { ...prev.mic, status: 'success' } }));
         } catch (e) {
+            console.error("Mic Check Failed:", e);
             setChecks(prev => ({ ...prev, mic: { ...prev.mic, status: 'error' } }));
         }
 
         setIsRunning(false);
-    };
+    }, []);
 
     useEffect(() => {
         if (isOpen) {
