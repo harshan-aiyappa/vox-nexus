@@ -70,6 +70,7 @@ function App() {
 
     const [currentLanguage, setCurrentLanguage] = useState('en');
     const [isSystemCheckOpen, setIsSystemCheckOpen] = useState(false);
+    const [isSystemChecked, setIsSystemChecked] = useState(false);
     const scrollRef = useRef(null);
 
     // Auto-scroll logic for feed
@@ -84,7 +85,9 @@ function App() {
 
     useEffect(() => {
         const checkStatus = sessionStorage.getItem('vox_nexus_system_checked');
-        if (!checkStatus) {
+        if (checkStatus === 'true') {
+            setIsSystemChecked(true);
+        } else {
             const timer = setTimeout(() => setIsSystemCheckOpen(true), 600);
             return () => clearTimeout(timer);
         }
@@ -93,22 +96,36 @@ function App() {
     const fetchToken = useCallback(async () => {
         try {
             const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080';
-            const response = await fetch(`${backendUrl}/token?room=vox-nexus&name=vox-user`);
+            const userId = `vx-${Math.floor(Math.random() * 9000) + 1000}`;
+            const response = await fetch(`${backendUrl}/token?room=vox-nexus&name=${userId}`);
+            if (!response.ok) throw new Error('ERR_TOKEN_FETCH');
             const data = await response.json();
             return data.token;
         } catch (e) {
-            console.error(e);
+            console.error("[VOX_NEXUS] Token failure:", e);
             return null;
         }
     }, []);
 
     const handleToggleConnect = useCallback(async () => {
+        if (!isSystemChecked) {
+            setIsSystemCheckOpen(true);
+            return;
+        }
         if (isConnected) await disconnect();
         else {
             const t = await fetchToken();
             if (t) await connect(t, url);
         }
-    }, [isConnected, disconnect, connect, url, fetchToken]);
+    }, [isConnected, disconnect, connect, url, fetchToken, isSystemChecked]);
+
+    const handleToggleMic = useCallback(() => {
+        if (!isSystemChecked) {
+            setIsSystemCheckOpen(true);
+            return;
+        }
+        toggleMicrophone();
+    }, [toggleMicrophone, isSystemChecked]);
 
     return (
         <div className="h-screen bg-[#F8FAFC] text-slate-900 font-sans selection:bg-indigo-100 overflow-hidden relative flex flex-col">
@@ -184,24 +201,26 @@ function App() {
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <button
-                                        onClick={toggleMicrophone}
+                                        onClick={handleToggleMic}
                                         className={clsx(
                                             "flex flex-col items-center justify-center gap-3 py-5 rounded-3xl transition-all duration-500 active:scale-95",
-                                            micEnabled ? "bg-indigo-600 text-white shadow-xl shadow-indigo-100" : "bg-slate-50 text-slate-400 border border-slate-200"
+                                            !isSystemChecked ? "bg-slate-50 text-slate-300 border-slate-100 cursor-not-allowed opacity-60" :
+                                                micEnabled ? "bg-indigo-600 text-white shadow-xl shadow-indigo-100" : "bg-slate-50 text-slate-400 border border-slate-200"
                                         )}
                                     >
                                         {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-                                        <span className="text-[9px] font-black uppercase tracking-widest">{micEnabled ? "Mute" : "Speak"}</span>
+                                        <span className="text-[9px] font-black uppercase tracking-widest">{!isSystemChecked ? "Locked" : micEnabled ? "Mute" : "Speak"}</span>
                                     </button>
                                     <button
                                         onClick={handleToggleConnect}
                                         className={clsx(
                                             "flex flex-col items-center justify-center gap-3 py-5 rounded-3xl transition-all duration-500 active:scale-95 text-white",
-                                            isConnected ? "bg-slate-900 shadow-xl shadow-slate-200" : "bg-indigo-600 shadow-xl shadow-indigo-100"
+                                            !isSystemChecked ? "bg-slate-200 text-slate-400 cursor-not-allowed grayscale" :
+                                                isConnected ? "bg-slate-900 shadow-xl shadow-slate-200" : "bg-indigo-600 shadow-xl shadow-indigo-100"
                                         )}
                                     >
                                         {isConnected ? <PhoneOff className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
-                                        <span className="text-[9px] font-black uppercase tracking-widest">{isConnected ? "Quit" : "Link"}</span>
+                                        <span className="text-[9px] font-black uppercase tracking-widest">{!isSystemChecked ? "Locked" : isConnected ? "Quit" : "Link"}</span>
                                     </button>
                                 </div>
                             </div>
@@ -331,6 +350,7 @@ function App() {
                 onClose={() => setIsSystemCheckOpen(false)}
                 onComplete={() => {
                     sessionStorage.setItem('vox_nexus_system_checked', 'true');
+                    setIsSystemChecked(true);
                     setIsSystemCheckOpen(false);
                 }}
             />

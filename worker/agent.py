@@ -76,9 +76,9 @@ def load_model():
     global model
     if not model and WhisperModel:
         try:
-            logger.info("🧠 Loading Whisper Model (small)...")
-            model = WhisperModel("small", device="cpu", compute_type="int8")
-            logger.info("✅ Whisper Model Loaded Successfully!")
+            logger.info("🧠 Loading Whisper Model (tiny)...")
+            model = WhisperModel("tiny", device="cpu", compute_type="int8")
+            logger.info("✅ Whisper Model (tiny) Loaded Successfully!")
         except Exception as e:
             logger.error(f"❌ Failed to load Whisper Model: {e}")
     elif model:
@@ -194,11 +194,24 @@ async def entrypoint(ctx: JobContext):
         except Exception as e:
             logger.error(f"⚠️ Error handling data packet: {e}")
 
+    @ctx.room.on("track_published")
+    def on_track_published(publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+        logger.info(f"📄 [TRACK_PUBLISHED] {publication.sid} from {participant.identity} ({publication.kind})")
+        # Ensure we subscribe if auto_subscribe didn't catch it for some reason
+        if not publication.subscribed:
+            publication.set_subscribed(True)
+
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
-        logger.info(f"✅ [TRACK_SUBSCRIBED] {publication.sid} from {participant.identity} ({track.kind})")
-        if track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(transcribe_track(track, publication, participant, ctx.room, current_language_ref))
+        try:
+            logger.info(f"✅ [TRACK_SUBSCRIBED] {publication.sid} from {participant.identity} ({track.kind})")
+            if track.kind == rtc.TrackKind.KIND_AUDIO:
+                logger.info(f"🎤 Starting transcription for audio track {track.sid}")
+                asyncio.create_task(transcribe_track(track, publication, participant, ctx.room, current_language_ref))
+            else:
+                logger.info(f"ℹ️ Skipping non-audio track: {track.kind}")
+        except Exception as e:
+            logger.error(f"❌ Error in on_track_subscribed: {e}")
 
     @ctx.room.on("track_muted")
     def on_track_muted(participant: rtc.RemoteParticipant, publication: rtc.RemoteTrackPublication):
@@ -224,11 +237,22 @@ async def entrypoint(ctx: JobContext):
     await ctx.connect(auto_subscribe=True)
     logger.info(f"✅ [JOINED] Room: {ctx.room.name}")
 
-    # Check for existing participants/tracks
-    for participant in ctx.room.remote_participants.values():
-        for publication in participant.track_publications.values():
-             if publication.kind == rtc.TrackKind.KIND_AUDIO and publication.subscribed and publication.track:
-                  asyncio.create_task(transcribe_track(publication.track, publication, participant, ctx.room, current_language_ref))
+    # Check for existing participants/tracks with detailed logging
+    logger.info(f"🔍 Checking for {len(ctx.room.remote_participants)} existing participants...")
+    for p_sid, participant in ctx.room.remote_participants.items():
+        logger.info(f"  - Participant: {participant.identity} ({p_sid})")
+        for pub_sid, publication in participant.track_publications.items():
+             logger.info(f"    - Track: {pub_sid} (Kind: {publication.kind}, Subscribed: {publication.subscribed})")
+             if publication.kind == rtc.TrackKind.KIND_AUDIO:
+                 if not publication.subscribed:
+                     logger.info(f"    ⚠️ Found unsubscribed audio track {pub_sid}, subscribing...")
+                     publication.set_subscribed(True)
+                 
+                 if publication.track:
+                      logger.info(f"    ▶️ manually starting transcription for {pub_sid}")
+                      asyncio.create_task(transcribe_track(publication.track, publication, participant, ctx.room, current_language_ref))
+                 else:
+                      logger.warning(f"    ⚠️ Published audio track {pub_sid} has no track object (pending subscription?)")
 
     # Keep the worker alive until the room is closed or disconnected
     try:
@@ -243,5 +267,13 @@ async def entrypoint(ctx: JobContext):
         logger.info("Job finished")
 
 if __name__ == "__main__":
-    print("🚀 Launching LiveKit agent...", flush=True)
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # Use 'start' (prod mode) to avoid the watcher/dev reloader issues on Windows
+    # This prevents the IncompleteReadError from the IPC pipe
+    import sys
+    if "dev" in sys.argv:
+        sys.argv.remove("dev")
+    sys.argv.append("start")
+    
+    print("🚀 Launching LiveKit agent (Stable Mode)...", flush=True)
+    # Increase load_threshold to 0.9 to accept jobs even under heavier local load
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, load_threshold=0.9))
