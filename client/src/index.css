@@ -6,6 +6,14 @@
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
+    --white: #ffffff;
+    --black: #000000;
+    --transparent: transparent;
+    --blue-500: #3b82f6;
+    --blue-400: #60a5fa;
+    --blue-300: #93c5fd;
+    --indigo-300: #a5b4fc;
+    --violet-200: #ddd6fe;
   }
 
   html {
@@ -17,16 +25,21 @@
   body {
     @apply bg-slate-50 text-slate-900 overflow-hidden;
     font-feature-settings: "pkna", "ss01", "ss02", "cv01";
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Mobile browser friendly */
   }
 
   /* Global Scrollbar Removals for that "App" feel */
   ::-webkit-scrollbar {
     display: none;
   }
-  
+
   * {
-    -ms-overflow-style: none; /* IE/Edge */
-    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none;
+    /* IE/Edge */
+    scrollbar-width: none;
+    /* Firefox */
   }
 }
 
@@ -34,7 +47,7 @@
   .text-balance {
     text-wrap: balance;
   }
-  
+
   .glass-card {
     @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-xl;
   }
