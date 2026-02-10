@@ -99,28 +99,30 @@ async def entrypoint(ctx: JobContext):
         BUFFER_SIZE_BYTES = int(SAMPLE_RATE * CHUNK_SECONDS * BYTES_PER_SAMPLE)
         
         async for event in audio_stream:
+            # Fast append (low overhead)
             audio_buffer.extend(event.frame.data.tobytes())
 
             if len(audio_buffer) >= BUFFER_SIZE_BYTES:
                  start_time = time.time()
                  
                  # Create Read-Only View
-                 # IMPORTANT: This view is tied to audio_buffer. We must process or copy before clearing buffer.
+                 # IMPORTANT: np.frombuffer locks the buffer. We must rebind buffer instead of clearing it.
                  full_arr_view = np.frombuffer(audio_buffer, dtype=np.int16)
                  
                  peak_vol = np.abs(full_arr_view).max() if len(full_arr_view) > 0 else 0
-                 logger.info(f"📊 [PROCESS_CHUNK] Peak: {peak_vol:.4f} | Size: {len(audio_buffer)}")
                  
                  # Optimization: specific check to skip silence efficiently
                  if peak_vol < 100: 
-                     audio_buffer.clear()
+                     audio_buffer = bytearray() # Rebind to new buffer
                      continue
+                 
+                 logger.info(f"📊 [PROCESS_CHUNK] Peak: {peak_vol:.4f} | Size: {len(audio_buffer)}")
 
-                 # Create float array (this performs a copy and type conversion, safe to clear buffer after)
+                 # Create float array (this performs a copy and type conversion)
                  float_arr = full_arr_view.astype(np.float32) / 32768.0
                  
-                 # Now safe to clear buffer
-                 audio_buffer.clear()
+                 # Rebind to new buffer to avoid BufferError
+                 audio_buffer = bytearray()
                  
                  if model:
                      try:
