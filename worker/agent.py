@@ -178,8 +178,6 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("track_muted")
     def on_track_muted(*args):
-        logger.info(f"🔍 [DEBUG_ARGS] track_muted received {len(args)} args: {[type(a).__name__ for a in args]}")
-        
         participant = None
         publication = None
 
@@ -209,8 +207,6 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("track_unmuted")
     def on_track_unmuted(*args):
-        logger.info(f"🔍 [DEBUG_ARGS] track_unmuted received {len(args)} args: {[type(a).__name__ for a in args]}")
-
         participant = None
         publication = None
 
