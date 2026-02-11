@@ -75,44 +75,70 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
         }
 
         try {
-            console.log("🎤 Starting Microphone...");
+            console.log("🎤 Starting Raw PCM Capture...");
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
 
-            // Use MediaRecorder to capture chunks
-            // mimeType: 'audio/webm' is standard for Chrome/Firefox
-            const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            // AudioContext at 16kHz (preferred for Whisper)
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const source = audioContext.createMediaStreamSource(stream);
 
-            recorder.ondataavailable = async (event) => {
-                if (event.data.size > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-                    // Convert Blob to Base64
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        const base64data = reader.result.split(',')[1];
-                        wsRef.current.send(JSON.stringify({
-                            type: 'audio',
-                            data: base64data
-                        }));
-                    };
-                    reader.readAsDataURL(event.data);
+            // Using ScriptProcessor for simple PCM capture
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            processor.onaudioprocess = (e) => {
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Convert Float32 to Int16
+                    const pcmData = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+                    }
+
+                    // Send as base64 chunk
+                    // Note: In a production app, we'd send raw binary, but our current WS handles JSON
+                    const uint8 = new Uint8Array(pcmData.buffer);
+                    let binary = '';
+                    for (let i = 0; i < uint8.length; i++) {
+                        binary += String.fromCharCode(uint8[i]);
+                    }
+                    const base64data = btoa(binary);
+
+                    wsRef.current.send(JSON.stringify({
+                        type: 'audio',
+                        data: base64data
+                    }));
                 }
             };
 
-            // Slice every 1s (1000ms) to send chunks
-            recorder.start(1000);
-            mediaRecorderRef.current = recorder;
+            mediaRecorderRef.current = {
+                stop: () => {
+                    processor.disconnect();
+                    source.disconnect();
+                    audioContext.close();
+                }
+            };
+
             setIsRecording(true);
-            console.log("🎙️ Recording started (Direct Mode)");
+            console.log("🎙️ Raw PCM Streaming started (Direct Mode)");
 
         } catch (err) {
             console.error("❌ Error accessing microphone:", err);
         }
-    }, []);
+    }, [url]);
 
     const stopRecording = useCallback(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
-            console.log("⏹️ MediaRecorder stopped");
+        if (mediaRecorderRef.current) {
+            try {
+                mediaRecorderRef.current.stop();
+            } catch (e) {
+                console.error("Error stopping recorder:", e);
+            }
+            mediaRecorderRef.current = null;
+            console.log("⏹️ Audio Capture stopped");
         }
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
@@ -125,6 +151,16 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
         if (isRecording) stopRecording();
         else startRecording();
     }, [isRecording, startRecording, stopRecording]);
+
+    const setLanguage = useCallback((langCode) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+                type: 'set_language',
+                code: langCode
+            }));
+            console.log(`🌐 Direct Mode: Language set to ${langCode}`);
+        }
+    }, []);
 
     // Cleanup on unmount
     useEffect(() => {
@@ -140,6 +176,7 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
         isConnected,
         isRecording,
         toggleRecording,
-        transcripts
+        transcripts,
+        setLanguage
     };
 }

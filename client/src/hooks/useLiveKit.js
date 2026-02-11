@@ -104,12 +104,24 @@ export const useLiveKit = (defaultUrl) => {
 
         const checkAgents = () => {
             const participants = Array.from(newRoom.remoteParticipants.values());
-            const hasAgent = participants.some(p => p.identity.startsWith('agent-') || p.kind === 'agent');
+            console.log(`👥 Room Participants:`, participants.map(p => `${p.identity} (${p.kind})`));
+            const hasAgent = participants.some(p =>
+                p.identity.startsWith('agent-') ||
+                p.kind === 'agent' ||
+                p.identity.includes('agent')
+            );
+            console.log(`🤖 Agent Detected: ${hasAgent}`);
             setAgentConnected(hasAgent);
         };
 
-        newRoom.on(RoomEvent.ParticipantConnected, checkAgents);
-        newRoom.on(RoomEvent.ParticipantDisconnected, checkAgents);
+        newRoom.on(RoomEvent.ParticipantConnected, (p) => {
+            console.log(`👤 Participant Connected: ${p.identity}`);
+            checkAgents();
+        });
+        newRoom.on(RoomEvent.ParticipantDisconnected, (p) => {
+            console.log(`👤 Participant Disconnected: ${p.identity}`);
+            checkAgents();
+        });
 
         try {
             console.log("🔗 Connecting to LiveKit room...");

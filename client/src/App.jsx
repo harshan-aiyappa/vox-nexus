@@ -268,6 +268,7 @@ function LandingPage({ onEnterMode }) {
 }
 
 function SessionPage({ mode, isSystemChecked, startCheck }) {
+    const navigate = useNavigate();
     // LiveKit Hooks
     const [url] = useState(import.meta.env.VITE_LIVEKIT_URL || '');
     const agent = useLiveKit(url);
@@ -285,6 +286,15 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
     const [currentLanguage, setCurrentLanguage] = useState('en');
     const [isConnecting, setIsConnecting] = useState(false);
     const scrollRef = useRef(null);
+
+    // Sync language change to hooks
+    useEffect(() => {
+        if (mode === 'agent' && agent.isConnected) {
+            agent.setLanguage(currentLanguage);
+        } else if (mode === 'direct' && direct.isConnected) {
+            direct.setLanguage(currentLanguage);
+        }
+    }, [currentLanguage, isConnected, mode]);
 
     // Auto-scroll logic
     useEffect(() => {

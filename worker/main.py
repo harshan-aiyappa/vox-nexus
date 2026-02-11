@@ -33,9 +33,15 @@ logger = logging.getLogger("vox-nexus-unified")
 
 # --- 🛰️ LiveKit Agent Mode (Sub-Process) ---
 
-async def transcribe_track(track: rtc.RemoteAudioTrack, room: rtc.Room):
+async def transcribe_track(track: rtc.RemoteAudioTrack, room: rtc.Room, state: dict):
     """Handles audio stream from a LiveKit participant."""
-    logger.info(f"🎤 [AGENT_STREAM] Starting for track {track.sid}")
+    identity = "unknown"
+    for p in room.remote_participants.values():
+        if track.sid in [pub.track.sid for pub in p.track_publications.values() if pub.track]:
+            identity = p.identity
+            break
+
+    logger.info(f"🎤 [AGENT_STREAM] Starting for {identity} (track {track.sid})")
     audio_stream = rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=CHANNELS)
     audio_buffer = bytearray()
     
@@ -59,9 +65,12 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, room: rtc.Room):
              audio_buffer = remainder
              
              try:
+                 # Use participant-specific language or default to 'en'
+                 lang = state.get(identity, state.get("default", "en"))
+                 
                  # In Agent Mode, we run in an executor
                  loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr))
+                 text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr, language=lang))
                  inference_duration = time.time() - start_time
                  
                  if text:
@@ -72,13 +81,15 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, room: rtc.Room):
                          "participant": "agent", 
                          "latency_ms": int(inference_duration * 1000)
                      })
-                     await room.local_participant.publish_data(payload, reliable=True)
+                     await room.local_participant.publish_data(
+                         payload.encode('utf-8'), 
+                         reliable=True
+                     )
              except Exception as e:
                  logger.error(f"❌ [AGENT] Transcription error: {e}")
 
 async def agent_entrypoint(ctx: JobContext):
     logger.info(f"🚀 [AGENT] Job Started! Room: {ctx.room.name}")
-    stt_service.load_model()
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant):
@@ -86,18 +97,84 @@ async def agent_entrypoint(ctx: JobContext):
             asyncio.create_task(transcribe_track(track, ctx.room))
 
     await ctx.connect(auto_subscribe=True)
+    
+    # Also handle participants already in the room
+    for participant in ctx.room.remote_participants.values():
+        for publication in participant.track_publications.values():
+            if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                logger.info(f"🎤 [AGENT] Subscribing to existing track {publication.track.sid}")
+                asyncio.create_task(transcribe_track(publication.track, ctx.room))
+
     while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
         await asyncio.sleep(1)
 
+async def run_agent_bot():
+    """Continuously runs the Agent as a bot participant in the room."""
+    from livekit import api
+    
+    stt_service.load_model()
+    
+    url = os.getenv("LIVEKIT_URL")
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+    room_name = "vox-nexus"
+    
+    if not all([url, api_key, api_secret]):
+        logger.error("❌ Agent Bot: Missing credentials in .env")
+        return
+
+    # Shared state for language settings
+    session_state = {"default": "en"}
+
+    while True:
+        try:
+            logger.info(f"🤖 Agent Bot: Attempting to join room '{room_name}'...")
+            token = api.AccessToken(api_key, api_secret) \
+                .with_grants(api.VideoGrants(room_join=True, room=room_name)) \
+                .with_identity("agent-bot") \
+                .to_jwt()
+            
+            room = rtc.Room()
+            
+            @room.on("track_subscribed")
+            def on_track_subscribed(track: rtc.Track, publication, participant):
+                if track.kind == rtc.TrackKind.KIND_AUDIO:
+                    logger.info(f"🎤 [AGENT] Subscribing to track {track.sid} from {participant.identity}")
+                    asyncio.create_task(transcribe_track(track, room, session_state))
+
+            @room.on("data_received")
+            def on_data_received(data_packet: rtc.DataPacket):
+                try:
+                    payload = json.loads(data_packet.data.decode('utf-8'))
+                    if payload.get('type') == 'set_language':
+                        identity = data_packet.participant.identity if data_packet.participant else "default"
+                        lang = payload.get('code', 'en')
+                        session_state[identity] = lang
+                        logger.info(f"🌐 [AGENT] Language set to '{lang}' for {identity}")
+                except Exception as e:
+                    logger.error(f"❌ [AGENT] Failed to parse data: {e}")
+
+            await room.connect(url, token)
+            logger.info("✅ Agent Bot: Connected and Listening.")
+            
+            # Catch anyone already in the room
+            for participant in room.remote_participants.values():
+                for publication in participant.track_publications.values():
+                    if publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                        logger.info(f"🎤 [AGENT] Catching existing track {publication.track.sid} from {participant.identity}")
+                        asyncio.create_task(transcribe_track(publication.track, room, session_state))
+            
+            # Keep alive and monitor
+            while room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
+                await asyncio.sleep(5)
+                
+        except Exception as e:
+            logger.error(f"❌ Agent Bot Error: {e}")
+            await asyncio.sleep(5)
+
 def run_livekit_worker():
-    """Starts the LiveKit worker in a separate process."""
-    from livekit.agents import cli
-    # Note: cli.run_app handles the full worker lifecycle correctly on Windows
-    logger.info("📡 Starting LiveKit Agent Worker subprocess...")
-    # Update sys.argv to simulate a 'start' command
-    import sys
-    sys.argv = [sys.argv[0], "start"]
-    cli.run_app(WorkerOptions(entrypoint_fnc=agent_entrypoint, load_threshold=3.0))
+    """Entry point for the agent bot process."""
+    asyncio.run(run_agent_bot())
 
 # --- 🔌 Direct Mode Logic (FastAPI Process) ---
 
@@ -111,12 +188,18 @@ def run_fastapi_server():
         await websocket.accept()
         logger.info("🔌 [DIRECT] Client connected")
         audio_buffer = bytearray()
+        current_language = "en"
         
         try:
             while True:
                 data = await websocket.receive_text()
                 message = json.loads(data)
                 
+                if message.get('type') == 'set_language':
+                    current_language = message.get('code', 'en')
+                    logger.info(f"🌐 [DIRECT] Language set to '{current_language}'")
+                    continue
+
                 if message.get('type') == 'audio':
                     chunk = base64.b64decode(message['data'])
                     audio_buffer.extend(chunk)
@@ -139,7 +222,7 @@ def run_fastapi_server():
                         
                         # Run in executor to keep WS loop responsive
                         loop = asyncio.get_running_loop()
-                        text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr))
+                        text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr, language=current_language))
                         inference_duration = time.time() - start_time
                         
                         if text:
