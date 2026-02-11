@@ -4,7 +4,7 @@ from typing import Optional, Set
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("vox-nexus-core")
+logger = logging.getLogger("vox-nexus-stt")
 
 try:
     from faster_whisper import WhisperModel
@@ -14,9 +14,11 @@ except ImportError:
 
 # Hallucination Blocklist (Common Whisper artifacts)
 HALLUCINATIONS: Set[str] = {
-    "Thank you.", "Thanks for watching.", "You", 
+    "Thank you.", "Thanks for watching.", "Thank you for watching.", "You", 
     "MBC", "Amara.org", "Subtitles by", "Subtitles",
-    "Copyright", "©"
+    "Copyright", "©", "The end", "Silence", "audio", "noise",
+    "Music", "Violin music", "Eerie music", "Dramatic music",
+    "Watching", "Sous-titres"
 }
 
 class WhisperService:
@@ -43,14 +45,21 @@ class WhisperService:
         cleaned_lower = cleaned.lower()
         
         for h in HALLUCINATIONS:
-            if cleaned_lower == h.lower(): return ""
+            h_low = h.lower()
+            # Exact match for short artifacts to avoid blocking valid sentences
+            if len(h_low) < 10:
+                if cleaned_lower == h_low: return ""
+            # Partial match for longer artifact strings
+            elif h_low in cleaned_lower:
+                return ""
         
-        if cleaned_lower.startswith("thank you") and len(cleaned_lower) < 15:
+        # Catch "Thank you" variants specifically
+        if "thank you" in cleaned_lower and len(cleaned_lower) < 20:
             return ""
             
         return cleaned
 
-    def transcribe(self, float_arr, language="en", vad_min_ms=150, vad_threshold=0.6):
+    def transcribe(self, float_arr, language="en", vad_threshold=0.6):
         if not self.model:
             return ""
         
@@ -60,9 +69,9 @@ class WhisperService:
                 beam_size=1, 
                 language=language, 
                 condition_on_previous_text=False,
-                vad_filter=True,
-                vad_parameters=dict(min_speech_duration_ms=vad_min_ms),
-                no_speech_threshold=vad_threshold
+                vad_filter=False, # Manual gating in main.py is more reliable
+                no_speech_threshold=vad_threshold,
+                initial_prompt="Use simple English."
             )
             text = " ".join([segment.text for segment in segments]).strip()
             return self.filter_hallucinations(text)
@@ -71,4 +80,4 @@ class WhisperService:
             return ""
 
 # Singleton instance
-whisper_service = WhisperService()
+stt_service = WhisperService()

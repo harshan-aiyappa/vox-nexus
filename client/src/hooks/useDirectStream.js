@@ -11,44 +11,52 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
 
     // Connect to WebSocket
     const connect = useCallback(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-        console.log("🔌 Connecting to Direct Mode WS:", url);
-        const ws = new WebSocket(url);
-
-        ws.onopen = () => {
-            console.log("✅ Direct Mode WS Connected");
-            setIsConnected(true);
-        };
-
-        ws.onclose = () => {
-            console.log("❌ Direct Mode WS Disconnected");
-            setIsConnected(false);
-            stopRecording(); // Safety stop
-        };
-
-        ws.onerror = (err) => {
-            console.error("⚠️ Direct Mode WS Error:", err);
-            setIsConnected(false);
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'transcription') {
-                    setTranscripts(prev => [...prev, {
-                        text: data.text,
-                        timestamp: Date.now(),
-                        isFinal: data.isFinal,
-                        participant: 'direct-agent'
-                    }]);
-                }
-            } catch (e) {
-                console.error("Error parsing WS message:", e);
+        return new Promise((resolve, reject) => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                resolve();
+                return;
             }
-        };
 
-        wsRef.current = ws;
+            console.log("🔌 Connecting to Direct Mode WS:", url);
+            const ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                console.log("✅ Direct Mode WS Connected");
+                setIsConnected(true);
+                resolve();
+            };
+
+            ws.onclose = () => {
+                console.log("❌ Direct Mode WS Disconnected");
+                setIsConnected(false);
+                stopRecording();
+            };
+
+            ws.onerror = (err) => {
+                console.error("⚠️ Direct Mode WS Error:", err);
+                setIsConnected(false);
+                reject(err);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'transcription') {
+                        setTranscripts(prev => [...prev, {
+                            text: data.text,
+                            timestamp: Date.now(),
+                            isFinal: data.isFinal,
+                            latency: data.latency_ms,
+                            participant: 'direct-agent'
+                        }]);
+                    }
+                } catch (e) {
+                    console.error("Error parsing WS message:", e);
+                }
+            };
+
+            wsRef.current = ws;
+        });
     }, [url]);
 
     const disconnect = useCallback(() => {

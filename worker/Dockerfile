@@ -16,5 +16,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Run the agent
-CMD ["python", "agent.py", "start"]
+# Run the unified worker
+CMD ["python", "main.py"]

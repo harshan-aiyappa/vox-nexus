@@ -79,7 +79,11 @@ export const useLiveKit = (defaultUrl) => {
             try {
                 const data = JSON.parse(str);
                 if (data.type === 'transcription') {
-                    setTranscripts(prev => [...prev, { text: data.text, timestamp: Date.now() }]);
+                    setTranscripts(prev => [...prev, {
+                        text: data.text,
+                        timestamp: Date.now(),
+                        latency: data.latency_ms
+                    }]);
                 }
             } catch (e) {
                 console.error('Failed to parse data message', e);
@@ -139,6 +143,13 @@ export const useLiveKit = (defaultUrl) => {
             clearTimeout(reconnectTimeoutRef.current);
         }
         if (roomRef.current) {
+            // Explicitly stop all local tracks to release hardware
+            roomRef.current.localParticipant?.trackPublications?.forEach(publication => {
+                if (publication.track) {
+                    publication.track.stop();
+                    console.log(`🛑 Stopped local track: ${publication.track.kind}`);
+                }
+            });
             await roomRef.current.disconnect();
             roomRef.current = null;
         }
@@ -146,6 +157,13 @@ export const useLiveKit = (defaultUrl) => {
         setIsConnected(false);
         setConnectionState('disconnected');
     }, []);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            disconnect();
+        };
+    }, [disconnect]);
 
     const toggleMicrophone = async () => {
         if (!room) return;

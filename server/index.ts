@@ -77,5 +77,12 @@ app.post('/api/logs', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+  console.log(`
+    🚀 VOXORA SERVER ONLINE
+    ==================================================
+    ► Port:      ${port}
+    ► Mode:      ${process.env.NODE_ENV || 'development'}
+    ► System:    Ready for Neural Uplink
+    ==================================================
+    `);
 });

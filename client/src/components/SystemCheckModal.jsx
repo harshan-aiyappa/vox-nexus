@@ -41,7 +41,7 @@ const CheckItem = memo(({ icon: Icon, label, status, detail }) => {
     );
 });
 
-export function SystemCheckModal({ isOpen, onClose, onComplete }) {
+export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
     const [checks, setChecks] = useState({
         backend: 'idle',
         livekit: 'idle',
@@ -63,7 +63,8 @@ export function SystemCheckModal({ isOpen, onClose, onComplete }) {
         // 2. Backend Check
         update('backend', 'checking');
         try {
-            const res = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8080'}/health`);
+            // Use relative path to leverage Vite proxy or same-origin
+            const res = await fetch('/health');
             await new Promise(r => setTimeout(r, 700));
             update('backend', res.ok ? 'ready' : 'error');
         } catch {
@@ -81,14 +82,18 @@ export function SystemCheckModal({ isOpen, onClose, onComplete }) {
             update('mic', 'error');
         }
 
-        // 4. LiveKit Check
-        update('livekit', 'checking');
-        const url = import.meta.env.VITE_LIVEKIT_URL;
-        await new Promise(r => setTimeout(r, 800));
-        update('livekit', url ? 'ready' : 'error');
+        // 4. LiveKit Check (Only for Agent Mode)
+        if (mode === 'agent') {
+            update('livekit', 'checking');
+            const url = import.meta.env.VITE_LIVEKIT_URL;
+            await new Promise(r => setTimeout(r, 800));
+            update('livekit', url ? 'ready' : 'error');
+        } else {
+            update('livekit', 'ready'); // Auto-pass or skip in direct mode
+        }
 
         setIsScanning(false);
-    }, []);
+    }, [mode]);
 
     useEffect(() => {
         if (isOpen) runChecks();
@@ -152,12 +157,14 @@ export function SystemCheckModal({ isOpen, onClose, onComplete }) {
                                 status={checks.mic}
                                 detail="Hardware Stream Protocol"
                             />
-                            <CheckItem
-                                icon={Wifi}
-                                label="LiveKit Protocol"
-                                status={checks.livekit}
-                                detail="RTC Cloud Synchronization"
-                            />
+                            {mode === 'agent' && (
+                                <CheckItem
+                                    icon={Wifi}
+                                    label="LiveKit Protocol"
+                                    status={checks.livekit}
+                                    detail="RTC Cloud Synchronization"
+                                />
+                            )}
                         </div>
 
                         {/* Modal Footer */}
