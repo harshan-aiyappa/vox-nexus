@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Room, RoomEvent, createLocalAudioTrack, Track } from 'livekit-client';
+import { toast } from '../components/ui/Toaster';
 
 export const useLiveKit = (defaultUrl) => {
     const [room, setRoom] = useState(null);
@@ -19,6 +20,7 @@ export const useLiveKit = (defaultUrl) => {
         const wsUrl = url || defaultUrl;
         if (!wsUrl || !token) {
             console.error("Missing URL or Token");
+            toast("Missing Connection Credentials", "error");
             return;
         }
 
@@ -47,11 +49,13 @@ export const useLiveKit = (defaultUrl) => {
             setConnectionState('connected');
             setIsConnected(true);
             reconnectAttemptsRef.current = 0;
+            toast("Secure Link Established", "success");
         });
 
         newRoom.on(RoomEvent.Reconnecting, () => {
             console.log('🔄 Reconnecting...');
             setConnectionState('reconnecting');
+            toast("Link Unstable. Re-routing...", "warning");
         });
 
         newRoom.on(RoomEvent.Reconnected, () => {
@@ -151,23 +155,27 @@ export const useLiveKit = (defaultUrl) => {
     }, [defaultUrl]);
 
     const disconnect = useCallback(async () => {
+        setIsConnected(false);
+        setConnectionState('disconnected');
+
         if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
         }
         if (roomRef.current) {
             // Explicitly stop all local tracks to release hardware
-            roomRef.current.localParticipant?.trackPublications?.forEach(publication => {
-                if (publication.track) {
-                    publication.track.stop();
-                    console.log(`🛑 Stopped local track: ${publication.track.kind}`);
-                }
-            });
+            const localTracks = roomRef.current.localParticipant?.trackPublications;
+            if (localTracks) {
+                localTracks.forEach(publication => {
+                    if (publication.track) {
+                        publication.track.stop();
+                        console.log(`🛑 Strictly Stopped local track: ${publication.track.kind}`);
+                    }
+                });
+            }
             await roomRef.current.disconnect();
             roomRef.current = null;
         }
         setRoom(null);
-        setIsConnected(false);
-        setConnectionState('disconnected');
     }, []);
 
     // Cleanup on unmount

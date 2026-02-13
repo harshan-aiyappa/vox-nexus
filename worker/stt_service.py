@@ -1,5 +1,6 @@
 import logging
 import time
+import threading
 from typing import Optional, Set
 
 # Configure logging
@@ -24,13 +25,14 @@ HALLUCINATIONS: Set[str] = {
 class WhisperService:
     def __init__(self):
         self.model: Optional['WhisperModel'] = None
+        self._lock = threading.Lock()
     
     def load_model(self):
         """Loads the Whisper model if not already loaded."""
         if not self.model and WhisperModel:
             try:
                 logger.info("🧠 Loading Whisper Model (small)...")
-                self.model = WhisperModel("small", device="cpu", compute_type="int8")
+                self.model = WhisperModel("small", device="cpu", compute_type="int8", download_root=None)
                 logger.info("✅ Whisper Model (small) Loaded Successfully!")
             except Exception as e:
                 logger.error(f"❌ Failed to load Whisper Model: {e}")
@@ -64,15 +66,19 @@ class WhisperService:
             return ""
         
         try:
-            segments, _ = self.model.transcribe(
-                float_arr, 
-                beam_size=1, 
-                language=language, 
-                condition_on_previous_text=False,
-                vad_filter=False, # Manual gating in main.py is more reliable
-                no_speech_threshold=vad_threshold,
-                initial_prompt="Use simple English."
-            )
+            with self._lock:
+                segments, _ = self.model.transcribe(
+                    float_arr, 
+                    beam_size=3, 
+                    language=language, 
+                    condition_on_previous_text=False,
+                    vad_filter=True, 
+                    vad_parameters=dict(
+                        min_silence_duration_ms=1000,  # Increased from 500ms
+                        threshold=0.3  # Lowered from default 0.5
+                    ),
+                    initial_prompt="Use simple English."
+                )
             text = " ".join([segment.text for segment in segments]).strip()
             return self.filter_hallucinations(text)
         except Exception as e:

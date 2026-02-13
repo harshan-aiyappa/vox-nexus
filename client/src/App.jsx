@@ -9,6 +9,7 @@ import { SystemCheckModal } from './components/SystemCheckModal';
 import { TextGenerateEffect } from './components/ui/text-generate-effect';
 import { WavyBackground } from './components/ui/wavy-background';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Toaster } from './components/ui/Toaster';
 
 function App() {
     return (
@@ -48,8 +49,9 @@ function AppContent() {
 
     const handleEnterMode = (selectedMode) => {
         setMode(selectedMode);
-        setIsSystemChecked(false);
+        setIsSystemChecked(false); // Force re-validation
         setIsSystemCheckOpen(true);
+        navigate('/session');
     };
 
     const onSystemCheckComplete = () => {
@@ -83,7 +85,8 @@ function AppContent() {
                                 {mode === 'agent' ? 'Agent Mode' : 'Direct Stream'}
                             </span>
                         </div>
-                    )}
+
+)}
                 </div>
 
                 <div className="flex items-center gap-4 md:gap-6">
@@ -119,11 +122,18 @@ function AppContent() {
                 onClose={() => setIsSystemCheckOpen(false)}
                 onComplete={onSystemCheckComplete}
             />
+            <Toaster />
         </>
     );
 }
 
 function LandingPage({ onEnterMode }) {
+    // Reset system check when landing
+    useEffect(() => {
+        // We don't use onEnterMode here to avoid infinite loops, 
+        // but landing home should conceptually reset state
+    }, []);
+
     return (
         <motion.main
             initial={{ opacity: 0, y: 20 }}
@@ -145,12 +155,12 @@ function LandingPage({ onEnterMode }) {
 
                             {/* Card Header & Title */}
                             <CardItem translateZ="50" className="text-2xl font-black text-zinc-900 uppercase tracking-tight">
-                                Agent Mode
+                                Cloud Agent
                             </CardItem>
 
                             {/* Description */}
-                            <CardItem as="p" translateZ="60" className="text-zinc-500 text-sm max-w-sm mt-4 leading-relaxed font-medium">
-                                LiveKit WebRTC Cloud Intelligence. Real-time audio processing via global edge network. Ideal for production-grade conversational AI with sub-millisecond latency.
+                            <CardItem as="p" translateZ="60" className="text-zinc-500 text-sm max-w-sm mt-4 leading-relaxed font-bold">
+                                LiveKit WebRTC Cloud Relay. Real-time audio processing via global edge network. Ideal for production-grade conversational streams.
                             </CardItem>
 
                             {/* Tech Stack Tags */}
@@ -269,6 +279,7 @@ function LandingPage({ onEnterMode }) {
 
 function SessionPage({ mode, isSystemChecked, startCheck }) {
     const navigate = useNavigate();
+    const scrollRef = useRef(null);
     // LiveKit Hooks
     const [url] = useState(import.meta.env.VITE_LIVEKIT_URL || '');
     const agent = useLiveKit(url);
@@ -285,7 +296,12 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
 
     const [currentLanguage, setCurrentLanguage] = useState('en');
     const [isConnecting, setIsConnecting] = useState(false);
-    const scrollRef = useRef(null);
+    // Auto-trigger system check if not done
+    useEffect(() => {
+        if (!isSystemChecked) {
+            startCheck();
+        }
+    }, [isSystemChecked, startCheck]);
 
     // Sync language change to hooks
     useEffect(() => {
@@ -423,7 +439,7 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                                         isConnected ? "bg-zinc-800" : "bg-zinc-300"
                                     )} />
                                     <span className="text-[10px] md:text-[11px] font-black uppercase text-zinc-700">
-                                        {mode === 'agent' ? 'Neural Agent' : 'Socket Relay'}
+                                        {mode === 'agent' ? 'Cloud Agent' : 'Socket Relay'}
                                     </span>
                                 </div>
                                 <span className="text-[8px] md:text-[9px] font-black text-zinc-900 uppercase tracking-widest">
@@ -497,7 +513,7 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                 </div>
 
                 {/* Telemetry Visualizer */}
-                <div className="space-y-3 lg:space-y-4 hidden md:block">
+                <div className={clsx("space-y-3 lg:space-y-4 hidden md:block transition-opacity", mode !== 'agent' && "opacity-30 grayscale pointer-events-none")}>
                     <div className="flex items-center gap-2 md:gap-3 mb-4 md:mb-6">
                         <Radio className="w-3.5 h-3.5 md:w-4 md:h-4 text-zinc-900" />
                         <h2 className="text-[10px] md:text-xs lg:text-sm font-black uppercase tracking-[0.2em] text-zinc-400">Stream Analytics</h2>
@@ -511,17 +527,19 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                                     </div>
                                     <div>
                                         <p className="text-[10px] md:text-xs font-black text-zinc-700">Packet Integrity</p>
-                                        <p className="text-[8px] md:text-[9px] font-bold text-zinc-400 uppercase">Real-time stats</p>
+                                        <p className="text-[8px] md:text-[9px] font-bold text-zinc-400 uppercase">
+                                            {mode === 'agent' ? 'Edge Metrics' : 'Bypassed (Local)'}
+                                        </p>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-3 md:gap-4">
                                     <CardItem translateZ={40} className="p-3 md:p-4 bg-zinc-50 rounded-2xl space-y-1">
                                         <span className="text-[8px] md:text-[9px] font-black text-zinc-400 tracking-widest uppercase">Ping</span>
-                                        <p className="text-lg md:text-xl font-black text-zinc-900">12<span className="text-zinc-400 text-[9px] md:text-[10px] ml-0.5">ms</span></p>
+                                        <p className="text-lg md:text-xl font-black text-zinc-900">{mode === 'agent' ? '12' : '--'}<span className="text-zinc-400 text-[9px] md:text-[10px] ml-0.5">ms</span></p>
                                     </CardItem>
                                     <CardItem translateZ={40} className="p-3 md:p-4 bg-zinc-50 rounded-2xl space-y-1">
                                         <span className="text-[8px] md:text-[9px] font-black text-zinc-400 tracking-widest uppercase">Jitter</span>
-                                        <p className="text-lg md:text-xl font-black text-zinc-900">0.2<span className="text-zinc-400 text-[9px] md:text-[10px] ml-0.5">ms</span></p>
+                                        <p className="text-lg md:text-xl font-black text-zinc-900">{mode === 'agent' ? '0.2' : '--'}<span className="text-zinc-400 text-[9px] md:text-[10px] ml-0.5">ms</span></p>
                                     </CardItem>
                                 </div>
                             </div>
@@ -538,7 +556,7 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                             <p className="text-[9px] md:text-[10px] font-black text-zinc-900 uppercase tracking-widest mb-1">Optimized Path</p>
                             <p className="text-[9px] md:text-[10px] font-bold text-zinc-500 leading-relaxed opacity-80">
                                 {mode === 'agent'
-                                    ? "Neural processing is optimized for ultra-low latency via WebRTC global edge network."
+                                    ? "Cloud processing is optimized for ultra-low latency via WebRTC global edge network."
                                     : "Direct Stream mode bypasses cloud edge for local offline-first processing via WebSocket."}
                             </p>
                         </div>
@@ -566,11 +584,13 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                     ref={scrollRef}
                     className="flex-1 overflow-y-auto p-4 md:p-10 lg:p-16 no-scrollbar pb-32 md:pb-20"
                 >
-                    <AnimatePresence mode="popLayout">
+                    <AnimatePresence mode="popLayout" initial={false}>
                         {transcripts.length === 0 ? (
                             <motion.div
+                                key="empty-state"
                                 initial={{ opacity: 0, scale: 0.95 }}
                                 animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
                                 className="h-full flex flex-col items-center justify-center opacity-40 mix-blend-multiply py-20"
                             >
                                 <div className="p-8 md:p-12 bg-white rounded-full mb-6 md:mb-8 shadow-sm border border-zinc-100">
@@ -580,7 +600,13 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                                 <p className="text-[9px] md:text-[10px] text-zinc-400 font-bold uppercase tracking-widest mt-2">{mode === 'agent' ? "Standing by for audio capture" : "Waiting for socket stream"}</p>
                             </motion.div>
                         ) : (
-                            <div className="space-y-8 md:space-y-12 max-w-4xl mx-auto pb-20">
+                            <motion.div
+                                key="feed-list"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                className="space-y-8 md:space-y-12 max-w-4xl mx-auto pb-20"
+                            >
                                 {transcripts.map((item, i) => (
                                     <motion.div
                                         key={item.timestamp + i}
@@ -611,7 +637,7 @@ function SessionPage({ mode, isSystemChecked, startCheck }) {
                                         </div>
                                     </motion.div>
                                 ))}
-                            </div>
+                            </motion.div>
                         )}
                     </AnimatePresence>
                 </div>

@@ -27,8 +27,44 @@ app.use((req, res, next) => {
 
 // --- API Routes ---
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+  let workerStatus = 'offline';
+  try {
+    const workerRes = await fetch('http://localhost:8000/health');
+    if (workerRes.ok) {
+      const data: any = await workerRes.json();
+      workerStatus = data.model_loaded ? 'online' : 'loading';
+    }
+  } catch (e) {
+    workerStatus = 'offline';
+  }
+
+  res.json({
+    status: 'ok',
+    server: 'online',
+    worker: workerStatus,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/validate-all', async (req, res) => {
+  const checks = {
+    server: true,
+    worker: false,
+    livekit: !!(process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
+    timestamp: new Date().toISOString()
+  };
+
+  try {
+    const workerRes = await fetch('http://localhost:8000/health');
+    if (workerRes.ok) {
+      const data: any = await workerRes.json();
+      checks.worker = data.status === 'ok' && data.model_loaded;
+    }
+  } catch (e) { }
+
+  const allPassed = checks.server && checks.worker;
+  res.status(allPassed ? 200 : 503).json(checks);
 });
 
 app.get('/token', async (req, res) => {

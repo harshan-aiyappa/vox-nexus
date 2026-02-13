@@ -131,6 +131,8 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
     }, [url]);
 
     const stopRecording = useCallback(() => {
+        setIsRecording(false); // Immediate UI update
+
         if (mediaRecorderRef.current) {
             try {
                 mediaRecorderRef.current.stop();
@@ -140,11 +142,15 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
             mediaRecorderRef.current = null;
             console.log("⏹️ Audio Capture stopped");
         }
+
         if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current.getTracks().forEach(track => {
+                track.stop();
+                track.enabled = false;
+                console.log(`🎤 Hardware Track Stopped: ${track.label}`);
+            });
             streamRef.current = null;
         }
-        setIsRecording(false);
     }, []);
 
     const toggleRecording = useCallback(() => {

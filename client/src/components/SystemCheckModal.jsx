@@ -43,35 +43,40 @@ const CheckItem = memo(({ icon: Icon, label, status, detail }) => {
 
 export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
     const [checks, setChecks] = useState({
+        internet: 'idle',
         backend: 'idle',
+        worker: 'idle',
         livekit: 'idle',
-        mic: 'idle',
-        internet: 'idle'
+        mic: 'idle'
     });
     const [isScanning, setIsScanning] = useState(false);
 
     const runChecks = useCallback(async () => {
         setIsScanning(true);
-
         const update = (id, status) => setChecks(prev => ({ ...prev, [id]: status }));
 
-        // 1. Internet Check
+        // 1. Uplink (Internet)
         update('internet', 'checking');
-        await new Promise(r => setTimeout(r, 600));
         update('internet', navigator.onLine ? 'ready' : 'error');
+        await new Promise(r => setTimeout(r, 400));
 
-        // 2. Backend Check
+        // 2. Gateway (Backend Server)
         update('backend', 'checking');
         try {
-            // Use relative path to leverage Vite proxy or same-origin
             const res = await fetch('/health');
-            await new Promise(r => setTimeout(r, 700));
+            const data = await res.json();
             update('backend', res.ok ? 'ready' : 'error');
+
+            // 3. Engine Core (Worker - Verified via Backend)
+            update('worker', 'checking');
+            await new Promise(r => setTimeout(r, 600));
+            update('worker', data.worker === 'online' ? 'ready' : data.worker === 'loading' ? 'checking' : 'error');
         } catch {
             update('backend', 'error');
+            update('worker', 'error');
         }
 
-        // 3. Mic Check
+        // 4. Audio Interface (Mic Hardware)
         update('mic', 'checking');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -82,14 +87,14 @@ export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
             update('mic', 'error');
         }
 
-        // 4. LiveKit Check (Only for Agent Mode)
+        // 5. Cloud Protocol (LiveKit - Only for Agent Mode)
         if (mode === 'agent') {
             update('livekit', 'checking');
             const url = import.meta.env.VITE_LIVEKIT_URL;
-            await new Promise(r => setTimeout(r, 800));
+            await new Promise(r => setTimeout(r, 600));
             update('livekit', url ? 'ready' : 'error');
         } else {
-            update('livekit', 'ready'); // Auto-pass or skip in direct mode
+            update('livekit', 'ready');
         }
 
         setIsScanning(false);
@@ -147,9 +152,15 @@ export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
                             />
                             <CheckItem
                                 icon={Server}
-                                label="Neural Gateway"
+                                label="System Gateway"
                                 status={checks.backend}
                                 detail={`${import.meta.env.VITE_BACKEND_URL || 'Local'} Node Response`}
+                            />
+                            <CheckItem
+                                icon={Fingerprint}
+                                label="Engine Core"
+                                status={checks.worker}
+                                detail="Whisper Synchronization"
                             />
                             <CheckItem
                                 icon={Mic}
@@ -180,7 +191,7 @@ export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
                                 )}
                             >
                                 {isScanning ? <Loader2 className="w-5 h-5 md:w-6 md:h-6 animate-spin" /> : <Fingerprint className="w-5 h-5 md:w-6 md:h-6" />}
-                                {isScanning ? "SYNCHRONIZING..." : allReady ? "INITIALIZE CORE" : "SCAN INCOMPLETE"}
+                                {isScanning ? "SYNCHRONIZING..." : allReady ? "INITIALIZE CORE" : "SYSTEM LOCKED"}
                             </button>
 
                             {!allReady && !isScanning && (
