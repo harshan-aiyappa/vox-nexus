@@ -14,12 +14,65 @@ from livekit import rtc, api
 from dotenv import load_dotenv
 
 # Import our singleton STT service
-from stt_service import stt_service
+from stt_service import stt_service, SUPPORTED_LANGUAGES
 
 # --- Configuration ---
 SAMPLE_RATE = 16000
-BYTES_PER_SAMPLE = 2 
+BYTES_PER_SAMPLE = 2
 BUFFER_SIZE_BYTES = int(SAMPLE_RATE * 3.0 * BYTES_PER_SAMPLE) # 3.0 second chunks for better VAD
+
+# Look for a quiet point to cut at within the final quarter of the window,
+# so that a word straddling the boundary is not severed mid-syllable.
+CUT_SEARCH_FRACTION = 0.25
+CUT_FRAME_BYTES = int(SAMPLE_RATE * 0.02) * BYTES_PER_SAMPLE  # 20ms
+# Shortest trailing buffer still worth transcribing when a session ends.
+MIN_FLUSH_BYTES = int(SAMPLE_RATE * 0.4 * BYTES_PER_SAMPLE)   # 400ms
+
+
+def find_cut_point(buf: bytearray) -> int:
+    """Return an even byte offset at which to split `buf`.
+
+    Rather than always cutting at exactly BUFFER_SIZE_BYTES, scan the final
+    quarter of the window for the lowest-energy 20ms frame and cut there. This
+    keeps words intact across chunk boundaries without the duplication that an
+    overlapping window would introduce.
+    """
+    if len(buf) < BUFFER_SIZE_BYTES:
+        return (len(buf) // 2) * 2
+
+    arr = np.frombuffer(bytes(buf[:BUFFER_SIZE_BYTES]), dtype=np.int16)
+    search_start = int(BUFFER_SIZE_BYTES * (1.0 - CUT_SEARCH_FRACTION))
+
+    best_offset, best_energy = BUFFER_SIZE_BYTES, None
+    for off in range(search_start, BUFFER_SIZE_BYTES - CUT_FRAME_BYTES + 1, CUT_FRAME_BYTES):
+        start = off // BYTES_PER_SAMPLE
+        end = start + (CUT_FRAME_BYTES // BYTES_PER_SAMPLE)
+        if end > len(arr):
+            break
+        energy = float(np.abs(arr[start:end]).mean())
+        if best_energy is None or energy < best_energy:
+            best_energy, best_offset = energy, off + CUT_FRAME_BYTES
+
+    return (min(best_offset, BUFFER_SIZE_BYTES) // 2) * 2
+
+
+async def transcribe_segment(segment: bytes, language: str, min_peak: int):
+    """Run STT over one segment. Returns (text, seconds) or None if skipped."""
+    arr = np.frombuffer(segment, dtype=np.int16)
+    if arr.size == 0:
+        return None
+    if np.abs(arr).max() < min_peak:   # silence gate
+        return None
+
+    float_arr = arr.astype(np.float32) / 32768.0
+    started = time.time()
+    loop = asyncio.get_running_loop()
+    text = await loop.run_in_executor(
+        None, lambda: stt_service.transcribe(float_arr, language=language)
+    )
+    if not text:
+        return None
+    return text, time.time() - started
 
 # --- Setup ---
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
@@ -48,53 +101,68 @@ async def websocket_endpoint(websocket: WebSocket):
     direct_logger.info("🔌 Client connected")
     audio_buffer = bytearray()
     current_language = "en"
-    
+
+    async def emit(segment: bytes, reason: str):
+        result = await transcribe_segment(segment, current_language, min_peak=500)
+        if not result:
+            return
+        text, duration = result
+        direct_logger.info(f"📝 '{text}' (TAT: {duration:.3f}s, {reason})")
+        await websocket.send_json({
+            "type": "transcription",
+            "text": text,
+            "isFinal": True,
+            "latency_ms": int(duration * 1000),
+        })
+
     try:
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
-            
-            if message.get('type') == 'set_language':
-                current_language = message.get('code', 'en')
+            msg_type = message.get('type')
+
+            if msg_type == 'set_language':
+                code = message.get('code', 'en')
+                if code not in SUPPORTED_LANGUAGES:
+                    direct_logger.warning(f"⚠️ Unsupported language '{code}', keeping '{current_language}'")
+                    await websocket.send_json({
+                        "type": "error",
+                        "code": "unsupported_language",
+                        "message": f"Language '{code}' is not supported. Still using '{current_language}'.",
+                    })
+                    continue
+                current_language = code
                 direct_logger.info(f"🌐 Language set to '{current_language}'")
                 continue
 
-            if message.get('type') == 'audio':
-                chunk = base64.b64decode(message['data'])
-                audio_buffer.extend(chunk)
-                
-                if len(audio_buffer) >= BUFFER_SIZE_BYTES:
-                    start_time = time.time()
-                    # Process chunks of exactly buffer size
-                    even_length = (len(audio_buffer) // 2) * 2
-                    current_segment = audio_buffer[:even_length]
-                    remainder = audio_buffer[even_length:]
-                    
-                    full_arr_view = np.frombuffer(current_segment, dtype=np.int16)
-                    peak_vol = np.abs(full_arr_view).max() if len(full_arr_view) > 0 else 0
-                    
-                    # Silence Gate
-                    if peak_vol < 500: 
-                        audio_buffer = remainder
-                        continue
-                    
-                    audio_buffer = remainder
-                    float_arr = full_arr_view.astype(np.float32) / 32768.0
-                    
-                    # Run STT in the main Executor (Thread Pool available to FastAPI)
-                    loop = asyncio.get_running_loop()
-                    text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr, language=current_language))
-                    inference_duration = time.time() - start_time
-                    
-                    if text:
-                        direct_logger.info(f"📝 '{text}' (TAT: {inference_duration:.3f}s)")
-                        await websocket.send_json({
-                            "type": "transcription",
-                            "text": text,
-                            "isFinal": True,
-                            "latency_ms": int(inference_duration * 1000)
-                        })
+            # Let the client force a flush when the user stops speaking.
+            if msg_type == 'end_utterance':
+                if len(audio_buffer) >= MIN_FLUSH_BYTES:
+                    even = (len(audio_buffer) // 2) * 2
+                    await emit(bytes(audio_buffer[:even]), "end_utterance")
+                audio_buffer.clear()
+                continue
+
+            if msg_type == 'audio':
+                audio_buffer.extend(base64.b64decode(message['data']))
+
+                while len(audio_buffer) >= BUFFER_SIZE_BYTES:
+                    cut = find_cut_point(audio_buffer)
+                    segment = bytes(audio_buffer[:cut])
+                    del audio_buffer[:cut]
+                    await emit(segment, "window")
+
     except WebSocketDisconnect:
+        # The socket is already gone, so there is nobody to send a late
+        # transcript to. Clients should send 'end_utterance' before closing;
+        # log the shortfall so a client that forgets is visible rather than
+        # silently losing the tail of every session.
+        if len(audio_buffer) >= MIN_FLUSH_BYTES:
+            dropped = len(audio_buffer) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
+            direct_logger.warning(
+                f"⚠️ Disconnected with {dropped:.1f}s unprocessed — "
+                f"send 'end_utterance' before closing to capture it"
+            )
         direct_logger.info("🔌 Client disconnected")
     except Exception as e:
         direct_logger.error(f"❌ Message error: {e}")
@@ -123,42 +191,29 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, participant: rtc.RemoteP
             
         audio_buffer.extend(audio_frame.frame.data.tobytes())
 
-        if len(audio_buffer) >= BUFFER_SIZE_BYTES:
-             start_time = time.time()
-             even_length = (len(audio_buffer) // 2) * 2
-             current_segment = audio_buffer[:even_length]
-             remainder = audio_buffer[even_length:]
-             
-             full_arr_view = np.frombuffer(current_segment, dtype=np.int16)
-             peak_vol = np.abs(full_arr_view).max() if len(full_arr_view) > 0 else 0
-             
-             # Skip processing if audio is too quiet (mic muted or silence)
-             if peak_vol < 800:  # Increased threshold - only process actual speech
-                 audio_buffer = remainder
-                 continue
-             
-             float_arr = full_arr_view.astype(np.float32) / 32768.0
-             audio_buffer = remainder
-             
-             try:
-                 lang = state.get(identity, state.get("default", "en"))
-                 
-                 # Access the SAME stt_service instance (Thread-safe enough for inference)
-                 loop = asyncio.get_running_loop()
-                 text = await loop.run_in_executor(None, lambda: stt_service.transcribe(float_arr, language=lang))
-                 inference_duration = time.time() - start_time
-                 
-                 if text:
-                     agent_logger.info(f"📝 '{text}' (TAT: {inference_duration:.3f}s)")
-                     payload = json.dumps({
-                         "type": "transcription", 
-                         "text": text, 
-                         "participant": "agent", 
-                         "latency_ms": int(inference_duration * 1000)
-                     })
-                     await room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
-             except Exception as e:
-                 agent_logger.error(f"❌ Transcription error: {e}")
+        while len(audio_buffer) >= BUFFER_SIZE_BYTES:
+            cut = find_cut_point(audio_buffer)
+            segment = bytes(audio_buffer[:cut])
+            del audio_buffer[:cut]
+
+            try:
+                lang = state.get(identity, state.get("default", "en"))
+                # Higher gate than Direct mode: a muted mic still emits frames.
+                result = await transcribe_segment(segment, lang, min_peak=800)
+                if not result:
+                    continue
+
+                text, duration = result
+                agent_logger.info(f"📝 '{text}' (TAT: {duration:.3f}s)")
+                payload = json.dumps({
+                    "type": "transcription",
+                    "text": text,
+                    "participant": "agent",
+                    "latency_ms": int(duration * 1000)
+                })
+                await room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
+            except Exception as e:
+                agent_logger.error(f"❌ Transcription error: {e}")
 
 async def run_agent_main_loop():
     """Main loop for the Agent, polling for participants."""
@@ -220,6 +275,9 @@ async def run_agent_main_loop():
                     if payload.get('type') == 'set_language':
                         identity = data_packet.participant.identity if data_packet.participant else "default"
                         lang = payload.get('code', 'en')
+                        if lang not in SUPPORTED_LANGUAGES:
+                            agent_logger.warning(f"⚠️ Unsupported language '{lang}' from {identity}, ignoring")
+                            return
                         session_state[identity] = lang
                         agent_logger.info(f"🌐 Language set to '{lang}' for {identity}")
                 except Exception:
