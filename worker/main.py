@@ -115,7 +115,8 @@ async def transcribe_track(track: rtc.RemoteAudioTrack, participant: rtc.RemoteP
     
     audio_buffer = bytearray()
     
-    async for audio_frame in rtc.AudioStream(track):
+    # AudioStream defaults to 48kHz; the buffer math and Whisper both assume SAMPLE_RATE
+    async for audio_frame in rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1):
         # Stop immediately if room is disconnected
         if room.connection_state != rtc.ConnectionState.CONN_CONNECTED:
             break
