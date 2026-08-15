@@ -37,15 +37,35 @@ cd client && npm install
 cd server && npm install
 ```
 
-3. **Start all services**:
+3. **Start all services** — three terminals:
 ```bash
-start-local.bat
+# Terminal 1: Worker (Python + Whisper)
+cd worker && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py
+
+# Terminal 2: Server
+cd server && npm run dev
+
+# Terminal 3: Client
+cd client && npm run dev
+```
+
+Or run the worker in Docker instead of a local venv:
+```bash
+docker compose up --build
 ```
 
 This will start:
-- **Worker** (Docker): Python + Whisper AI
+- **Worker**: Python + Whisper AI on port 8000
 - **Server** (Local): Node.js backend on port 8080
 - **Client** (Local): React frontend on port 5173
+
+The worker downloads ~460MB of model weights on first run and takes
+roughly 15 seconds to become ready. `/health` reports `model_loaded`
+once it can transcribe.
+
+Without LiveKit credentials, set `DISABLE_AGENT_BOT=true` — the worker
+exits at boot otherwise. Direct mode works fully without them.
 
 ## 📋 Features
 
@@ -79,20 +99,15 @@ Modern light theme with:
 ## 🔧 Development
 
 ### Run Locally
-```bash
-# Terminal 1: Worker (Docker)
-docker-compose up
-
-# Terminal 2: Server
-cd server && npm run dev
-
-# Terminal 3: Client
-cd client && npm run dev
-```
-
 ### Access URLs
 - **Frontend**: http://localhost:5173
 - **Backend**: http://localhost:8080
+- **Worker**: http://localhost:8000
+
+### Modes
+- **Direct**: browser → WebSocket → Whisper. No LiveKit, no cloud cost.
+- **Agent**: LiveKit room; the worker joins as a bot and publishes
+  transcripts back as data packets. Needs LiveKit credentials.
 
 ## 📦 Tech Stack
 
@@ -103,9 +118,14 @@ cd client && npm run dev
 
 ## 🔐 Security
 
-- Environment variables for secrets
-- Short-lived LiveKit tokens
-- CORS configured for local development
+- Environment variables for secrets; `.env` is gitignored
+- LiveKit tokens are short-lived (`TOKEN_TTL`, default 15m)
+- CORS restricted to `ALLOWED_ORIGINS` (default: the local dev server)
+- `GET /token` is rate-limited per IP
+
+**Before exposing this beyond localhost**, set `TOKEN_API_KEY`. Without
+it `/token` is unauthenticated, and anyone who can reach the server can
+mint LiveKit credentials billed to your account.
 
 ## 📄 License
 

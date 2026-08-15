@@ -1,19 +1,31 @@
-version: '3.8'
-
 services:
   worker:
     build:
       context: ./worker
       dockerfile: Dockerfile
     ports:
-      - "9000:9000"
+      # The worker binds 8000 (see worker/main.py); the server polls 8000 too.
+      - "8000:8000"
     volumes:
-      - ./worker:/app
+      # Persist the Whisper download (~460MB) across container recreation,
+      # otherwise every `up --build` pays a cold model fetch.
+      - huggingface-cache:/root/.cache/huggingface
     environment:
       - LIVEKIT_URL=${LIVEKIT_URL}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-      - MODEL_SIZE=${MODEL_SIZE}
-      - WHISPER_DEVICE=${WHISPER_DEVICE}
-      - WHISPER_COMPUTE=${WHISPER_COMPUTE}
-      - PORT=9000
+      - MODEL_SIZE=${MODEL_SIZE:-small}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-cpu}
+      - WHISPER_COMPUTE=${WHISPER_COMPUTE:-int8}
+      - DISABLE_AGENT_BOT=${DISABLE_AGENT_BOT:-false}
+    restart: unless-stopped
+    healthcheck:
+      # Unhealthy until the model is actually loaded, not merely listening.
+      test: ["CMD-SHELL", "python -c \"import urllib.request,json,sys; sys.exit(0 if json.load(urllib.request.urlopen('http://localhost:8000/health')).get('model_loaded') else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+volumes:
+  huggingface-cache:
