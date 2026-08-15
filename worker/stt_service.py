@@ -1,4 +1,6 @@
 import logging
+import os
+import re
 import time
 import threading
 from typing import Optional, Set
@@ -19,8 +21,16 @@ HALLUCINATIONS: Set[str] = {
     "MBC", "Amara.org", "Subtitles by", "Subtitles",
     "Copyright", "©", "The end", "Silence", "audio", "noise",
     "Music", "Violin music", "Eerie music", "Dramatic music",
-    "Watching", "Sous-titres"
+    "Watching", "Sous-titres",
+    # The initial_prompt itself, which Whisper echoes back on unclear audio
+    "Use simple English",
 }
+
+# Whisper's own supported language set, so an unknown code fails loudly
+try:
+    from faster_whisper.tokenizer import _LANGUAGE_CODES as SUPPORTED_LANGUAGES
+except ImportError:
+    SUPPORTED_LANGUAGES = {"en", "es", "fr", "hi"}
 
 class WhisperService:
     def __init__(self):
@@ -30,35 +40,47 @@ class WhisperService:
     def load_model(self):
         """Loads the Whisper model if not already loaded."""
         if not self.model and WhisperModel:
+            size = os.getenv("MODEL_SIZE", "small")
+            device = os.getenv("WHISPER_DEVICE", "cpu")
+            compute = os.getenv("WHISPER_COMPUTE", "int8")
             try:
-                logger.info("🧠 Loading Whisper Model (small)...")
-                self.model = WhisperModel("small", device="cpu", compute_type="int8", download_root=None)
-                logger.info("✅ Whisper Model (small) Loaded Successfully!")
+                logger.info(f"🧠 Loading Whisper Model ({size}, {device}/{compute})...")
+                self.model = WhisperModel(size, device=device, compute_type=compute, download_root=None)
+                logger.info(f"✅ Whisper Model ({size}) Loaded Successfully!")
             except Exception as e:
                 logger.error(f"❌ Failed to load Whisper Model: {e}")
         elif self.model:
             logger.info("🧠 Model already loaded (cached).")
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Lowercase and strip punctuation/whitespace so that blocklist matching
+        is not defeated by a trailing '!' instead of a '.'."""
+        return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
     def filter_hallucinations(self, text: str) -> str:
         """Filters out common Whisper hallucinations."""
         if not text: return ""
         cleaned = text.strip()
         if not cleaned: return ""
-        cleaned_lower = cleaned.lower()
-        
+        cleaned_norm = self._normalize(cleaned)
+        if not cleaned_norm: return ""
+
         for h in HALLUCINATIONS:
-            h_low = h.lower()
+            h_norm = self._normalize(h)
+            if not h_norm:
+                continue
             # Exact match for short artifacts to avoid blocking valid sentences
-            if len(h_low) < 10:
-                if cleaned_lower == h_low: return ""
+            if len(h_norm) < 10:
+                if cleaned_norm == h_norm: return ""
             # Partial match for longer artifact strings
-            elif h_low in cleaned_lower:
+            elif h_norm in cleaned_norm:
                 return ""
-        
+
         # Catch "Thank you" variants specifically
-        if "thank you" in cleaned_lower and len(cleaned_lower) < 20:
+        if "thank you" in cleaned_norm and len(cleaned_norm) < 20:
             return ""
-            
+
         return cleaned
 
     def transcribe(self, float_arr, language="en", vad_threshold=0.6):
