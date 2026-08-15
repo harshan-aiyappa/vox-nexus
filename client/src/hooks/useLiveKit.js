@@ -1,4 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+
+// Cap retained history; see note in useDirectStream.
+const MAX_TRANSCRIPTS = 200;
 import { Room, RoomEvent, createLocalAudioTrack, Track } from 'livekit-client';
 import { toast } from '../components/ui/Toaster';
 
@@ -87,7 +90,7 @@ export const useLiveKit = (defaultUrl) => {
                         text: data.text,
                         timestamp: Date.now(),
                         latency: data.latency_ms
-                    }]);
+                    }].slice(-MAX_TRANSCRIPTS));
                 }
             } catch (e) {
                 console.error('Failed to parse data message', e);

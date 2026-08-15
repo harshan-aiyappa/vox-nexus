@@ -30,7 +30,10 @@
     /* Mobile browser friendly */
   }
 
-  /* Global Scrollbar Removals for that "App" feel */
+  /* Scrollbars are hidden for the "app" feel, but the body cannot scroll —
+     so panes that DO scroll must advertise it some other way. See the
+     .scroll-fade utility below, which the control rail and transcript feed
+     use to fade content at the edge when there is more to reach. */
   ::-webkit-scrollbar {
     display: none;
   }
@@ -41,11 +44,62 @@
     scrollbar-width: none;
     /* Firefox */
   }
+
+  /* Visible keyboard focus. Nothing in the app defined one, so keyboard
+     users had no indication of position. */
+  :focus-visible {
+    outline: 2px solid theme('colors.zinc.900');
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  /* The interface leans on aurora, sparkles, 3D tilt and spring transitions.
+     Honour a stated preference for less of it. */
+  @media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* Scroll affordance for panes whose scrollbars are hidden. The mask fades
+     the content edge only while there is more to scroll to, so overflow is
+     discoverable without restoring the scrollbars. */
+  .scroll-fade {
+    mask-image: linear-gradient(to bottom,
+        transparent 0,
+        #000 12px,
+        #000 calc(100% - 24px),
+        transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom,
+        transparent 0,
+        #000 12px,
+        #000 calc(100% - 24px),
+        transparent 100%);
+  }
+
+  /* Reading measure for the transcript feed. Without it, lines run to ~174
+     characters on a 1920px display; comfortable is 45-75. */
+  .measure {
+    max-width: 68ch;
+  }
+
+  /* Dynamic viewport height: 100vh measures without iOS Safari's URL bar,
+     so the bottom of a non-scrolling layout hides behind it. */
+  .h-dvh-safe {
+    height: 100vh;
+    height: 100dvh;
   }
 
   .glass-card {

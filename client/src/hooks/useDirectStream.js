@@ -1,5 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
+// Cap retained history: the feed renders every entry with an animated
+// wrapper, so an unbounded array grows memory and DOM nodes for the whole
+// session.
+const MAX_TRANSCRIPTS = 200;
+
 // How long to hold the socket open after asking the worker to flush, so the
 // final transcript has time to come back before we close.
 const FLUSH_GRACE_MS = 2000;
@@ -91,7 +96,7 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
                             isFinal: data.isFinal,
                             latency: data.latency_ms,
                             participant: 'direct-agent'
-                        }]);
+                        }].slice(-MAX_TRANSCRIPTS));
                     }
                 } catch (e) {
                     console.error("Error parsing WS message:", e);
