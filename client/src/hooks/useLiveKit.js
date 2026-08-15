@@ -178,13 +178,6 @@ export const useLiveKit = (defaultUrl) => {
         setRoom(null);
     }, []);
 
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            disconnect();
-        };
-    }, [disconnect]);
-
     const toggleMicrophone = async () => {
         if (!room) return;
         const newState = !micEnabled;
@@ -207,17 +200,25 @@ export const useLiveKit = (defaultUrl) => {
         };
     }, [disconnect]);
 
-    // iOS resume handling
+    // iOS resume handling: Safari suspends captured tracks when the tab is
+    // backgrounded, and they do not always resume on return.
     useEffect(() => {
         const handleVisibilityChange = async () => {
-            if (document.visibilityState === 'visible' && roomRef.current && !isConnected) {
-                if (roomRef.current.localParticipant) {
-                    const audioTracks = Array.from(roomRef.current.localParticipant.audioTracks.values());
-                    for (const pub of audioTracks) {
-                        if (pub.track) {
-                            // Attempt to restart or resume if needed (mostly handled by browser, but good for some contexts)
-                            // pub.track.restartTrack(); 
-                        }
+            if (document.visibilityState !== 'visible') return;
+            if (!roomRef.current || isConnected) return;
+
+            // NB: livekit-client v2 exposes audioTrackPublications; the v1
+            // `audioTracks` property was removed and reading it threw here.
+            const publications = roomRef.current.localParticipant?.audioTrackPublications;
+            if (!publications) return;
+
+            for (const pub of publications.values()) {
+                if (pub.track?.isMuted === false && pub.track.mediaStreamTrack?.readyState === 'ended') {
+                    try {
+                        await pub.track.restartTrack();
+                        console.log('🔁 Restarted suspended audio track after resume');
+                    } catch (err) {
+                        console.error('Failed to restart track on resume:', err);
                     }
                 }
             }

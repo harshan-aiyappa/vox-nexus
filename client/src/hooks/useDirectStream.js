@@ -1,5 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
+// How long to hold the socket open after asking the worker to flush, so the
+// final transcript has time to come back before we close.
+const FLUSH_GRACE_MS = 2000;
+
 export function useDirectStream(url = 'ws://localhost:8000/ws') {
     const [isConnected, setIsConnected] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
@@ -8,6 +12,39 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
     const wsRef = useRef(null);
     const mediaRecorderRef = useRef(null);
     const streamRef = useRef(null);
+
+    // Declared before connect/disconnect so both can depend on it without
+    // tripping the temporal dead zone.
+    const stopRecording = useCallback(() => {
+        setIsRecording(false); // Immediate UI update
+
+        if (mediaRecorderRef.current) {
+            try {
+                mediaRecorderRef.current.stop();
+            } catch (e) {
+                console.error("Error stopping recorder:", e);
+            }
+            mediaRecorderRef.current = null;
+            console.log("⏹️ Audio Capture stopped");
+        }
+
+        // Ask the worker to transcribe whatever is still buffered. Without this
+        // any speech shorter than its 3s window is discarded, which in practice
+        // means the last words before the user stops talking.
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'end_utterance' }));
+            console.log("⏏️ Flush requested for trailing audio");
+        }
+
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => {
+                track.stop();
+                track.enabled = false;
+                console.log(`🎤 Hardware Track Stopped: ${track.label}`);
+            });
+            streamRef.current = null;
+        }
+    }, []);
 
     // Connect to WebSocket
     const connect = useCallback(() => {
@@ -41,6 +78,12 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+
+                    if (data.type === 'error') {
+                        console.warn(`⚠️ Worker: ${data.message}`);
+                        return;
+                    }
+
                     if (data.type === 'transcription') {
                         setTranscripts(prev => [...prev, {
                             text: data.text,
@@ -57,16 +100,22 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
 
             wsRef.current = ws;
         });
-    }, [url]);
+    }, [url, stopRecording]);
 
     const disconnect = useCallback(() => {
-        stopRecording();
-        if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
+        stopRecording();   // queues the end_utterance flush
+
+        const ws = wsRef.current;
+        wsRef.current = null;
+        if (ws) {
+            // Hold the socket open briefly so the flushed transcript can arrive;
+            // closing immediately would discard the very audio we just asked for.
+            setTimeout(() => {
+                try { ws.close(); } catch { /* already closed */ }
+            }, FLUSH_GRACE_MS);
         }
         setIsConnected(false);
-    }, []);
+    }, [stopRecording]);
 
     const startRecording = useCallback(async () => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -128,29 +177,6 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
         } catch (err) {
             console.error("❌ Error accessing microphone:", err);
         }
-    }, [url]);
-
-    const stopRecording = useCallback(() => {
-        setIsRecording(false); // Immediate UI update
-
-        if (mediaRecorderRef.current) {
-            try {
-                mediaRecorderRef.current.stop();
-            } catch (e) {
-                console.error("Error stopping recorder:", e);
-            }
-            mediaRecorderRef.current = null;
-            console.log("⏹️ Audio Capture stopped");
-        }
-
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => {
-                track.stop();
-                track.enabled = false;
-                console.log(`🎤 Hardware Track Stopped: ${track.label}`);
-            });
-            streamRef.current = null;
-        }
     }, []);
 
     const toggleRecording = useCallback(() => {
@@ -174,7 +200,7 @@ export function useDirectStream(url = 'ws://localhost:8000/ws') {
             stopRecording();
             if (wsRef.current) wsRef.current.close();
         };
-    }, []);
+    }, [stopRecording]);
 
     return {
         connect,

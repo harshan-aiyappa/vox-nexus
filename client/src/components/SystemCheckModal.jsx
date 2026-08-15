@@ -41,6 +41,10 @@ const CheckItem = memo(({ icon: Icon, label, status, detail }) => {
     );
 });
 
+// The speech model needs ~15s from cold, so allow generously more than that.
+const WORKER_POLL_ATTEMPTS = 20;
+const WORKER_POLL_INTERVAL_MS = 2000;
+
 export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
     const [checks, setChecks] = useState({
         internet: 'idle',
@@ -68,9 +72,21 @@ export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
             update('backend', res.ok ? 'ready' : 'error');
 
             // 3. Engine Core (Worker - Verified via Backend)
+            // The speech model takes ~15s to load from cold. Keep polling while
+            // it reports 'loading' instead of leaving the check stuck, which
+            // used to lock the user out with no way forward but a page reload.
             update('worker', 'checking');
-            await new Promise(r => setTimeout(r, 600));
-            update('worker', data.worker === 'online' ? 'ready' : data.worker === 'loading' ? 'checking' : 'error');
+            let workerState = data.worker;
+            for (let i = 0; i < WORKER_POLL_ATTEMPTS && workerState === 'loading'; i++) {
+                await new Promise(r => setTimeout(r, WORKER_POLL_INTERVAL_MS));
+                try {
+                    const poll = await fetch('/health');
+                    workerState = (await poll.json()).worker;
+                } catch {
+                    workerState = 'offline';
+                }
+            }
+            update('worker', workerState === 'online' ? 'ready' : 'error');
         } catch {
             update('backend', 'error');
             update('worker', 'error');
@@ -195,9 +211,26 @@ export function SystemCheckModal({ isOpen, mode, onClose, onComplete }) {
                             </button>
 
                             {!allReady && !isScanning && (
-                                <div className="flex items-center justify-center gap-2 text-zinc-500 bg-zinc-50 py-3 rounded-2xl animate-pulse">
-                                    <AlertTriangle className="w-4 h-4" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest">Hardware/Network Obstruction Detected</span>
+                                <div className="flex flex-col gap-3">
+                                    <div className="flex items-center justify-center gap-2 text-zinc-600 bg-zinc-50 py-3 rounded-2xl">
+                                        <AlertTriangle className="w-4 h-4" />
+                                        <span className="text-xs font-bold">
+                                            {checks.worker === 'error' && checks.backend === 'ready'
+                                                ? "Speech engine isn't responding yet"
+                                                : checks.backend === 'error'
+                                                    ? "Can't reach the server on port 8080"
+                                                    : checks.mic === 'error'
+                                                        ? "Microphone access was blocked"
+                                                        : "Some checks didn't pass"}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={runChecks}
+                                        aria-label="Run the system checks again"
+                                        className="w-full py-3 rounded-2xl bg-white border border-zinc-300 text-zinc-700 text-xs font-bold hover:bg-zinc-50 active:scale-95 transition-all"
+                                    >
+                                        Try again
+                                    </button>
                                 </div>
                             )}
                         </div>
